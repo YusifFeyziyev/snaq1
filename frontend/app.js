@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────
 // KONFİQ
 // ─────────────────────────────────────────
-const BACKEND_URL = "https://YOUR_APP.onrender.com"; // Deploy sonrasi dəyis
+const BACKEND_URL = "https://snaq1.onrender.com"; // Deploy sonrasi dəyis
 
 // ─────────────────────────────────────────
 // YARDIMCI FUNKSİYALAR
