@@ -196,7 +196,7 @@ def hazirla_m4_input(m1: dict, m2: dict, m3: dict) -> dict:
     }
 
 
-def run_m4(m1: dict, m2: dict, m3: dict) -> dict:
+def run_m4(m1: dict, m2: dict, m3: dict, parser_json: dict=None) -> dict:
     m4_input = hazirla_m4_input(m1, m2, m3)
 
     try:
