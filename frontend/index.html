@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Futbol Analiz Sistemi</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo">⚽ Futbol Analiz</div>
+    <div class="subtitle">AI-Powered Match Analysis System</div>
+  </header>
+
+  <!-- GİRİŞ PANELİ -->
+  <section class="input-section">
+    <textarea id="statsInput" placeholder="SoccerStats mətnini bura yapışdır..."></textarea>
+    <button id="analyzeBtn" onclick="startAnalysis()">
+      <span id="btnText">Analiz Et</span>
+      <span id="btnSpinner" class="spinner hidden"></span>
+    </button>
+  </section>
+
+  <!-- XƏTA PANELİ -->
+  <div id="errorBox" class="error-box hidden"></div>
+
+  <!-- NƏTİCƏ PANELİ (analiz sonrası görünür) -->
+  <div id="resultPanel" class="hidden">
+
+    <!-- MƏRHƏLƏ KARTları -->
+    <section class="module-cards">
+      <div class="mod-card" id="cardM1">
+        <div class="mod-icon">🔢</div>
+        <div class="mod-name">M1 — Riyazi</div>
+        <div class="mod-score" id="scoreM1">—</div>
+        <div class="mod-bar"><div class="bar-fill" id="barM1"></div></div>
+        <div class="mod-status" id="statusM1"></div>
+      </div>
+      <div class="mod-card" id="cardM2">
+        <div class="mod-icon">🌐</div>
+        <div class="mod-name">M2 — Araşdırma</div>
+        <div class="mod-score" id="scoreM2">—</div>
+        <div class="mod-bar"><div class="bar-fill" id="barM2"></div></div>
+        <div class="mod-status" id="statusM2"></div>
+      </div>
+      <div class="mod-card" id="cardM3">
+        <div class="mod-icon">🧠</div>
+        <div class="mod-name">M3 — Ekspert</div>
+        <div class="mod-score" id="scoreM3">—</div>
+        <div class="mod-bar"><div class="bar-fill" id="barM3"></div></div>
+        <div class="mod-status" id="statusM3"></div>
+      </div>
+      <div class="mod-card" id="cardM4">
+        <div class="mod-icon">⚖️</div>
+        <div class="mod-name">M4 — Qərar</div>
+        <div class="mod-score" id="scoreM4">—</div>
+        <div class="mod-bar"><div class="bar-fill" id="barM4"></div></div>
+        <div class="mod-status" id="statusM4"></div>
+      </div>
+    </section>
+
+    <!-- TOP TÖVSİYƏLƏR -->
+    <section class="top-section">
+      <h2>🏆 Top Tövsiyələr</h2>
+      <div id="topPicks" class="top-picks"></div>
+    </section>
+
+    <!-- BAZAR ACCORDION -->
+    <section class="markets-section">
+      <h2>📊 Bütün Bazarlar</h2>
+      <div class="accordion" id="accordion">
+
+        <div class="acc-item" data-key="qol">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>⚽ Qol Over/Under</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-qol"></div>
+        </div>
+
+        <div class="acc-item" data-key="btts">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🤝 BTTS</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-btts"></div>
+        </div>
+
+        <div class="acc-item" data-key="tekcut">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🔢 Tək/Cüt (Qol)</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-tekcut"></div>
+        </div>
+
+        <div class="acc-item" data-key="netice">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🏆 Nəticə (1X2)</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-netice"></div>
+        </div>
+
+        <div class="acc-item" data-key="handicap">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🎯 Handicap</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-handicap"></div>
+        </div>
+
+        <div class="acc-item" data-key="deqiq">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🎯 Dəqiq Hesab</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-deqiq"></div>
+        </div>
+
+        <div class="acc-item" data-key="ilkyari">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>⏱ İlk Yarı</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-ilkyari"></div>
+        </div>
+
+        <div class="acc-item" data-key="vaxt">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>⏰ Vaxt Bazarı</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-vaxt"></div>
+        </div>
+
+        <div class="acc-item" data-key="corner">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🚩 Corner</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-corner"></div>
+        </div>
+
+        <div class="acc-item" data-key="sot">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>📊 Hədəfə Zərbə (SOT)</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-sot"></div>
+        </div>
+
+        <div class="acc-item" data-key="faul">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>✋ Faul</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-faul"></div>
+        </div>
+
+        <div class="acc-item" data-key="kart">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🟨 Kart</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-kart"></div>
+        </div>
+
+        <div class="acc-item" data-key="ofsayt">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🏃 Ofsayt</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-ofsayt"></div>
+        </div>
+
+        <div class="acc-item" data-key="aut">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🎯 Aut</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-aut"></div>
+        </div>
+
+        <div class="acc-item" data-key="qapi">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🧤 Qapıdan Zərbə</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-qapi"></div>
+        </div>
+
+        <div class="acc-item" data-key="penalti">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🔴 Penalti</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-penalti"></div>
+        </div>
+
+        <div class="acc-item" data-key="var">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>📺 VAR</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-var"></div>
+        </div>
+
+        <div class="acc-item" data-key="ilkqol">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🥇 İlk Qol</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-ilkqol"></div>
+        </div>
+
+        <div class="acc-item" data-key="kombine">
+          <div class="acc-header" onclick="toggleAcc(this)">
+            <span>🔗 Kombinə</span><span class="acc-arrow">▼</span>
+          </div>
+          <div class="acc-body" id="body-kombine"></div>
+        </div>
+
+      </div><!-- /accordion -->
+    </section>
+
+    <!-- M4 FİNAL PANELİ -->
+    <section class="final-section" id="finalSection">
+      <h2>⚖️ M4 Final Qərar</h2>
+      <div class="final-grid">
+
+        <div class="final-row">
+          <span>Sistem Güvəni</span>
+          <div class="conf-bar-wrap">
+            <div class="conf-bar-fill" id="fillSistem"></div>
+          </div>
+          <span id="lblSistem">—</span>
+        </div>
+
+        <div class="final-row">
+          <span>Qərar Güvəni</span>
+          <div class="conf-bar-wrap">
+            <div class="conf-bar-fill" id="fillQerar"></div>
+          </div>
+          <span id="lblQerar">—</span>
+        </div>
+
+        <div class="final-row penalty-row" id="penaltyRow"></div>
+
+      </div>
+
+      <div class="final-verdict" id="finalVerdict"></div>
+      <div class="final-reason" id="finalReason"></div>
+    </section>
+
+  </div><!-- /resultPanel -->
+
+  <script src="app.js"></script>
+</body>
+</html>
+```
+
