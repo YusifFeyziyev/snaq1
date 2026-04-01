@@ -104,10 +104,8 @@ def analyze():
             log.error(f"M2 xətası: {e}")
             m2_error.append(str(e))
 
-    t1 = threading.Thread(target=run_m1_thread)
-    t2 = threading.Thread(target=run_m2_thread)
-    t1.start(); t2.start()
-    t1.join();  t2.join()
+    run_m1_thread()
+    run_m2_thread()
 
     if m1_error:
         return jsonify({"success": False, "error": f"M1 xətası: {m1_error[0]}"}), 500
