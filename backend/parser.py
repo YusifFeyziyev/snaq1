@@ -172,5 +172,3 @@ def parse_statistics(raw_text: str) -> dict:
         
     except Exception as e:
         return {"success": False, "error": f"Xəta: {str(e)}"}
-
-print(json.dumps(test, ensure_ascii=False, indent=2))
