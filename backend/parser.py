@@ -1,4 +1,5 @@
 import json
+from tkinter.filedialog import test
 from groq import Groq
 import sys
 import os
@@ -96,44 +97,80 @@ JSON strukturu:
 YALNIZ JSON qaytar. Heç bir izah yazma.
 """
 
-def parse_statistics(raw_text: str) -> dict:
+def split_text(text: str, chunk_size: int = 3000) -> list:
+    """Mətni hissələrə böl"""
+    words = text.split()
+    chunks = []
+    current = []
+    current_len = 0
+    
+    for word in words:
+        current_len += len(word) + 1
+        current.append(word)
+        if current_len >= chunk_size:
+            chunks.append(" ".join(current))
+            current = []
+            current_len = 0
+    
+    if current:
+        chunks.append(" ".join(current))
+    
+    return chunks
+
+
+def parse_chunk(chunk: str) -> dict:
+    """Bir hissəni parse et"""
     try:
         response = client.chat.completions.create(
             model=MODEL_PARSER,
             messages=[
                 {"role": "system", "content": PARSER_PROMPT},
-                {"role": "user", "content": raw_text}
+                {"role": "user", "content": chunk}
             ],
             temperature=0.1,
             max_tokens=4000
         )
-        
         content = response.choices[0].message.content.strip()
-        
-        # JSON təmizlə
         import re
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
-            content = json_match.group()
-        else:
-            return {"success": False, "error": "JSON tapılmadı"}
+            return json.loads(json_match.group())
+        return {}
+    except:
+        return {}
+
+
+def merge_results(results: list) -> dict:
+    """Hissələrin nəticələrini birləşdir"""
+    final = {}
+    for result in results:
+        for key, value in result.items():
+            if key not in final:
+                final[key] = value
+            elif isinstance(value, dict) and isinstance(final[key], dict):
+                for k, v in value.items():
+                    if v is not None and (k not in final[key] or final[key][k] is None):
+                        final[key][k] = v
+    return final
+
+
+def parse_statistics(raw_text: str) -> dict:
+    try:
+        chunks = split_text(raw_text)
+        results = []
         
-        result = json.loads(content)
-        return {"success": True, "data": result}
+        for chunk in chunks:
+            result = parse_chunk(chunk)
+            if result:
+                results.append(result)
         
-    except json.JSONDecodeError as e:
-        return {"success": False, "error": f"JSON xətası: {str(e)}"}
+        if not results:
+            return {"success": False, "error": "Heç bir məlumat oxunmadı"}
+        
+        final_data = merge_results(results)
+        return {"success": True, "data": final_data}
+        
     except Exception as e:
         return {"success": False, "error": f"Xəta: {str(e)}"}
 
-
-if __name__ == "__main__":
-    # Test üçün
-    test_text = """
-    Mirandes vs Albacete
-    LaLiga2
-    PPG Home: 0.94, Away: 1.31, Total: 1.34
-    """
-    result = parse_statistics(test_text)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-
+print(json.dumps(test, ensure_ascii=False, indent=2))

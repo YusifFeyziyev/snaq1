@@ -492,6 +492,9 @@ def run_m1(parser_json: dict) -> dict:
     Parser JSON-u alır, bütün bazarları hesablayır.
     Çıxış M4-ə göndərilir.
     """
+    ev    = parser_json.get("ev", {})
+    qonaq = parser_json.get("qonaq", {})
+
     qol     = hesabla_qol_bazasi(parser_json)
     bazarlar = hesabla_qol_bazarlari(qol)
     corner  = hesabla_corner(parser_json)
@@ -505,8 +508,21 @@ def run_m1(parser_json: dict) -> dict:
     guveni  = hesabla_guveni(parser_json, qol, corner, sot)
 
     # Kaskad bonuslar
-    ev_goz  = qol.get("ev_goz", 0)
-    qon_goz = qol.get("qon_goz", 0)
+    ev_oyun  = safe(ev.get("oyun_sayi")) or 16
+    qon_oyun = safe(qonaq.get("oyun_sayi")) or 16
+
+    ev_vurdu   = safe(ev.get("qol_vurdu")) or 0
+    ev_buraxdi = safe(ev.get("qol_buraxdi")) or 0
+    qon_vurdu  = safe(qonaq.get("qol_vurdu")) or 0
+    qon_buraxdi= safe(qonaq.get("qol_buraxdi")) or 0
+
+    ev_vurdu_ort   = ev_vurdu / ev_oyun
+    ev_buraxdi_ort = ev_buraxdi / ev_oyun
+    qon_vurdu_ort  = qon_vurdu / qon_oyun
+    qon_buraxdi_ort= qon_buraxdi / qon_oyun
+
+    ev_goz  = (ev_vurdu_ort + qon_buraxdi_ort) / 2
+    qon_goz = (qon_vurdu_ort + ev_buraxdi_ort) / 2
     ev_c    = safe(parser_json.get("ev", {}).get("corner_ort"))
     qon_c   = safe(parser_json.get("qonaq", {}).get("corner_ort"))
 
