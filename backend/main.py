@@ -12,25 +12,19 @@ from modules.m2_research import run_m2
 from modules.m3_expert import run_m3
 from modules.m4_decision import run_m4
 
-# --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 log = logging.getLogger(__name__)
 
-# --- App ---
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- Log qovluğu ---
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 
-# ─────────────────────────────────────────
-# Analiz nəticəsini fayla yaz (kalibrasiya)
-# ─────────────────────────────────────────
 def save_log(parser_json, m1, m2, m3, m4):
     try:
         ev  = parser_json.get("ev",    {}).get("ad", "?")
@@ -49,7 +43,7 @@ def save_log(parser_json, m1, m2, m3, m4):
             "m4_qerar_guveni":  m4.get("qerar_guveni"),
             "oynarim":          m4.get("oynarim"),
             "m4_full":          m4,
-            "real_netice":      None  # kalibrasiya üçün sonra doldurulur
+            "real_netice":      None
         }
 
         with open(path, "w", encoding="utf-8") as f:
@@ -60,13 +54,9 @@ def save_log(parser_json, m1, m2, m3, m4):
         log.warning(f"Log xətası: {e}")
 
 
-# ─────────────────────────────────────────
-# POST /analyze
-# ─────────────────────────────────────────
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
-    # Giriş yoxlaması
     body = request.get_json(silent=True)
     if not body or "statistics" not in body:
         return jsonify({"success": False, "error": "statistics sahəsi lazımdır"}), 400
@@ -78,8 +68,14 @@ def analyze():
     # ── 1. PARSER ──
     try:
         log.info("Parser başladı...")
-        parser_json = parse_statistics(raw_text)
-        log.info("Parser tamamlandı.")
+        parser_result = parse_statistics(raw_text)
+        if not parser_result.get("success"):
+            return jsonify({
+                "success": False,
+                "error": parser_result.get("error", "Parser xətası")
+            }), 500
+        parser_json = parser_result["data"]
+        log.info(f"Parser tamamlandı: {parser_json.get('ev', {}).get('ad')} vs {parser_json.get('qonaq', {}).get('ad')}")
     except Exception as e:
         log.error(f"Parser xətası: {e}")
         return jsonify({"success": False, "error": f"Parser xətası: {str(e)}"}), 500
@@ -113,11 +109,9 @@ def analyze():
     t1.start(); t2.start()
     t1.join();  t2.join()
 
-    # M1 kritikdir — xəta varsa dayandır
     if m1_error:
         return jsonify({"success": False, "error": f"M1 xətası: {m1_error[0]}"}), 500
 
-    # M2 boş qaldısa → weight=0 flag-i ilə davam
     if m2_error or not m2_result:
         log.warning("M2 boş qaldı — M2 weight=0 ilə davam edilir.")
         m2_result = {
@@ -128,7 +122,7 @@ def analyze():
     else:
         m2_result.setdefault("m2_bos", False)
 
-    # ── 3. M3 (M2 bitdikdən sonra) ──
+    # ── 3. M3 ──
     try:
         log.info("M3 başladı...")
         m3_result = run_m3(parser_json, m2_result)
@@ -137,41 +131,39 @@ def analyze():
         log.error(f"M3 xətası: {e}")
         return jsonify({"success": False, "error": f"M3 xətası: {str(e)}"}), 500
 
-    # ── 4. M4 (M1 + M3 hər ikisi hazır) ──
+    # ── 4. M4 ──
     try:
         log.info("M4 başladı...")
         m4_result = run_m4(m1_result, m2_result, m3_result, parser_json)
-        m4_result = m4_result.get("data", m4_result) if isinstance(m4_result, dict) and "data" in m4_result else m4_result
-        log.info(f"M4 CIXIS: {json.dumps(m4_result, ensure_ascii=False)[:1000]}")
-        log.info("M4 tamamlandı.")
+        if isinstance(m4_result, dict) and "data" in m4_result:
+            m4_result = m4_result["data"]
+        log.info(f"M4 tamamlandı: {json.dumps(m4_result, ensure_ascii=False)[:500]}")
     except Exception as e:
         log.error(f"M4 xətası: {e}")
         return jsonify({"success": False, "error": f"M4 xətası: {str(e)}"}), 500
 
-    # ── 5. Log saxla ──
+    # ── 5. Log ──
     save_log(parser_json, m1_result, m2_result, m3_result, m4_result)
 
     # ── 6. Cavab ──
     return jsonify({
-        "success": True,
-        "m1": m1_result,
-        "m2": m2_result,
-        "m3": m3_result,
-        "m4": m4_result
+        "success":     True,
+        "parser":      parser_json,
+        "m1":          m1_result,
+        "m2":          m2_result,
+        "m3":          m3_result,
+        "m4":          m4_result
     })
 
 
-# ─────────────────────────────────────────
-# Health check
-# ─────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
+    return jsonify({
+        "status":    "ok",
+        "timestamp": datetime.utcnow().isoformat()
+    })
 
 
-# ─────────────────────────────────────────
-# Run
-# ─────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
