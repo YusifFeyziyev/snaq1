@@ -2,10 +2,6 @@ import math
 import json
 from typing import Optional
 
-# ─────────────────────────────────────────
-#  YARDIMÇI FUNKSIYALAR
-# ─────────────────────────────────────────
-
 def poisson_prob(lam: float, k: int) -> float:
     if lam <= 0:
         return 0.0
@@ -29,11 +25,6 @@ def normal_over(mean: float, std: float, threshold: float) -> float:
 def safe(val, default=None):
     return val if val is not None else default
 
-
-# ─────────────────────────────────────────
-#  LIQA DAMPING
-# ─────────────────────────────────────────
-
 def get_damping(liqa_qol_ort: Optional[float]) -> float:
     if liqa_qol_ort is None:
         return 0.92
@@ -41,34 +32,39 @@ def get_damping(liqa_qol_ort: Optional[float]) -> float:
         return 0.88
     return 0.92
 
-
-# ─────────────────────────────────────────
-#  QOL BAZASI
-# ─────────────────────────────────────────
-
 def hesabla_qol_bazasi(data: dict) -> dict:
-    ev = data.get("ev", {})
+    ev    = data.get("ev", {})
     qonaq = data.get("qonaq", {})
-    liqa = data.get("liqa_ortalama", {})
+    liqa  = data.get("liqa_ortalama", {})
 
-    ev_vurdu   = safe(ev.get("qol_vurdu"))
-    ev_buraxdi = safe(ev.get("qol_buraxdi"))
-    qon_vurdu  = safe(qonaq.get("qol_vurdu"))
-    qon_buraxdi= safe(qonaq.get("qol_buraxdi"))
-    liqa_ort   = safe(liqa.get("qol_ort"))
+    ev_vurdu    = safe(ev.get("qol_vurdu"))
+    ev_buraxdi  = safe(ev.get("qol_buraxdi"))
+    qon_vurdu   = safe(qonaq.get("qol_vurdu"))
+    qon_buraxdi = safe(qonaq.get("qol_buraxdi"))
+    liqa_ort    = safe(liqa.get("qol_ort"))
 
     if None in [ev_vurdu, ev_buraxdi, qon_vurdu, qon_buraxdi]:
         return {"null_data": True, "sebeb": "qol_vurdu/buraxdi null"}
 
-    ev_goz  = (ev_vurdu + qon_buraxdi) / 2
-    qon_goz = (qon_vurdu + ev_buraxdi) / 2
+    ev_oyun  = safe(ev.get("oyun_sayi")) or 16
+    qon_oyun = safe(qonaq.get("oyun_sayi")) or 16
+
+    # Əgər dəyər 5-dən böyükdürsə toplam kimi qəbul et
+    if ev_vurdu > 5:
+        ev_vurdu   = ev_vurdu / ev_oyun
+        ev_buraxdi = ev_buraxdi / ev_oyun
+    if qon_vurdu > 5:
+        qon_vurdu   = qon_vurdu / qon_oyun
+        qon_buraxdi = qon_buraxdi / qon_oyun
+
+    ev_goz   = (ev_vurdu + qon_buraxdi) / 2
+    qon_goz  = (qon_vurdu + ev_buraxdi) / 2
     xam_baza = ev_goz + qon_goz
 
     damping = get_damping(liqa_ort)
 
-    # H2H korreksiyası
-    h2h = data.get("h2h", {})
-    h2h_ort = safe(h2h.get("ort_qol"))
+    h2h      = data.get("h2h", {})
+    h2h_ort  = safe(h2h.get("ort_qol"))
     h2h_ceki = 0.15
     if h2h_ort is not None:
         xam_baza = xam_baza * (1 - h2h_ceki) + h2h_ort * h2h_ceki
@@ -78,17 +74,12 @@ def hesabla_qol_bazasi(data: dict) -> dict:
     final_baza = xam_baza * damping
 
     return {
-        "ev_goz": round(ev_goz, 3),
-        "qon_goz": round(qon_goz, 3),
-        "xam_baza": round(xam_baza, 3),
+        "ev_goz":     round(ev_goz, 3),
+        "qon_goz":    round(qon_goz, 3),
+        "xam_baza":   round(xam_baza, 3),
         "final_baza": round(final_baza, 3),
-        "null_data": False
+        "null_data":  False
     }
-
-
-# ─────────────────────────────────────────
-#  QOL BAZARLARI
-# ─────────────────────────────────────────
 
 def hesabla_qol_bazarlari(qol: dict) -> dict:
     if qol.get("null_data"):
@@ -99,27 +90,22 @@ def hesabla_qol_bazarlari(qol: dict) -> dict:
     total   = qol["final_baza"]
 
     result = {
-        "over15": poisson_over(total, 1.5),
-        "over25": poisson_over(total, 2.5),
-        "over35": poisson_over(total, 3.5),
-        "over45": poisson_over(total, 4.5),
-        "under25": round(1 - poisson_over(total, 2.5), 4),
-        "under35": round(1 - poisson_over(total, 3.5), 4),
-        "under45": round(1 - poisson_over(total, 4.5), 4),
-        "under55": round(1 - poisson_over(total, 5.5), 4),
-        "btts": round(
-            (1 - poisson_prob(ev_lam, 0)) *
-            (1 - poisson_prob(qon_lam, 0)), 4
-        ),
+        "over15":   poisson_over(total, 1.5),
+        "over25":   poisson_over(total, 2.5),
+        "over35":   poisson_over(total, 3.5),
+        "over45":   poisson_over(total, 4.5),
+        "under25":  round(1 - poisson_over(total, 2.5), 4),
+        "under35":  round(1 - poisson_over(total, 3.5), 4),
+        "under45":  round(1 - poisson_over(total, 4.5), 4),
+        "under55":  round(1 - poisson_over(total, 5.5), 4),
+        "btts":     round((1 - poisson_prob(ev_lam, 0)) * (1 - poisson_prob(qon_lam, 0)), 4),
         "btts_xeyr": round(
-            poisson_prob(ev_lam, 0) +
-            poisson_prob(qon_lam, 0) -
+            poisson_prob(ev_lam, 0) + poisson_prob(qon_lam, 0) -
             poisson_prob(ev_lam, 0) * poisson_prob(qon_lam, 0), 4
         ),
         "null_data": False
     }
 
-    # Tək/Cüt
     tek = sum(
         poisson_exact(ev_lam, i) * poisson_exact(qon_lam, j)
         for i in range(8) for j in range(8) if (i + j) % 2 == 1
@@ -127,7 +113,6 @@ def hesabla_qol_bazarlari(qol: dict) -> dict:
     result["tek_qol"] = round(tek, 4)
     result["cut_qol"] = round(1 - tek, 4)
 
-    # Dəqiq hesab (ilk 16 kombinasiya)
     deqiq = {}
     for ev_q in range(5):
         for qon_q in range(5):
@@ -138,7 +123,6 @@ def hesabla_qol_bazarlari(qol: dict) -> dict:
             )
     result["deqiq_hesab"] = deqiq
 
-    # 1X2
     ev_qelib = sum(
         poisson_exact(ev_lam, i) * poisson_exact(qon_lam, j)
         for i in range(8) for j in range(8) if i > j
@@ -154,45 +138,35 @@ def hesabla_qol_bazarlari(qol: dict) -> dict:
     result["px2"] = round(beraberlik + (1 - ev_qelib - beraberlik), 4)
     result["p12"] = round(ev_qelib + (1 - ev_qelib - beraberlik), 4)
 
-    # Klean-şit
-    result["ev_klean"] = round(poisson_prob(qon_lam, 0), 4)
+    result["ev_klean"]  = round(poisson_prob(qon_lam, 0), 4)
     result["qon_klean"] = round(poisson_prob(ev_lam, 0), 4)
 
-    # İlk yarı
-    ev_ht  = ev_lam * 0.45
-    qon_ht = qon_lam * 0.45
+    ev_ht    = ev_lam * 0.45
+    qon_ht   = qon_lam * 0.45
     total_ht = ev_ht + qon_ht
     result["ht"] = {
         "over05": poisson_over(total_ht, 0.5),
         "over15": poisson_over(total_ht, 1.5),
         "over25": poisson_over(total_ht, 2.5),
-        "p1":  round(sum(
+        "p1": round(sum(
             poisson_exact(ev_ht, i) * poisson_exact(qon_ht, j)
             for i in range(6) for j in range(6) if i > j
         ), 4),
-        "px":  round(sum(
+        "px": round(sum(
             poisson_exact(ev_ht, i) * poisson_exact(qon_ht, j)
             for i in range(6) for j in range(6) if i == j
         ), 4),
     }
-    result["ht"]["p2"] = round(
-        1 - result["ht"]["p1"] - result["ht"]["px"], 4
-    )
+    result["ht"]["p2"] = round(1 - result["ht"]["p1"] - result["ht"]["px"], 4)
 
-    # Kombinə bazarlar
     result["kombine"] = {
         "over25_btts": round(result["over25"] * result["btts"] * 0.95, 4),
-        "p1_over25":   round(result["p1"]    * result["over25"] * 0.95, 4),
-        "p1_btts":     round(result["p1"]    * result["btts"]   * 0.95, 4),
-        "p2_over25":   round(result["p2"]    * result["over25"] * 0.95, 4),
+        "p1_over25":   round(result["p1"]     * result["over25"] * 0.95, 4),
+        "p1_btts":     round(result["p1"]     * result["btts"]   * 0.95, 4),
+        "p2_over25":   round(result["p2"]     * result["over25"] * 0.95, 4),
     }
 
     return result
-
-
-# ─────────────────────────────────────────
-#  CORNER BAZARLARI
-# ─────────────────────────────────────────
 
 def hesabla_corner(data: dict) -> dict:
     ev    = data.get("ev", {})
@@ -214,7 +188,6 @@ def hesabla_corner(data: dict) -> dict:
         key = f"over{str(t).replace('.', '_')}"
         result[key] = normal_over(mean, std, t)
 
-    # Tək/Cüt corner
     tek = sum(
         poisson_exact(ev_adj, i) * poisson_exact(qon_adj, j)
         for i in range(20) for j in range(20) if (i + j) % 2 == 1
@@ -222,7 +195,6 @@ def hesabla_corner(data: dict) -> dict:
     result["tek"] = round(tek, 4)
     result["cut"] = round(1 - tek, 4)
 
-    # İlk yarı corner
     ev_ht_c  = ev_adj * 0.45
     qon_ht_c = qon_adj * 0.45
     mean_ht  = ev_ht_c + qon_ht_c
@@ -231,17 +203,11 @@ def hesabla_corner(data: dict) -> dict:
         key = f"over{str(t).replace('.', '_')}"
         result["ht"][key] = normal_over(mean_ht, mean_ht * 0.30, t)
 
-    # 1X2 corner
-    result["p1"]  = normal_over(ev_adj - qon_adj, std * 0.7, 0)
-    result["p2"]  = normal_over(qon_adj - ev_adj, std * 0.7, 0)
-    result["px"]  = round(1 - result["p1"] - result["p2"], 4)
+    result["p1"] = normal_over(ev_adj - qon_adj, std * 0.7, 0)
+    result["p2"] = normal_over(qon_adj - ev_adj, std * 0.7, 0)
+    result["px"] = round(1 - result["p1"] - result["p2"], 4)
 
     return result
-
-
-# ─────────────────────────────────────────
-#  SOT BAZARLARI
-# ─────────────────────────────────────────
 
 def hesabla_sot(data: dict) -> dict:
     ev    = data.get("ev", {})
@@ -265,11 +231,6 @@ def hesabla_sot(data: dict) -> dict:
 
     return result
 
-
-# ─────────────────────────────────────────
-#  FAUL BAZARLARI
-# ─────────────────────────────────────────
-
 def hesabla_faul(data: dict) -> dict:
     ev    = data.get("ev", {})
     qonaq = data.get("qonaq", {})
@@ -290,11 +251,6 @@ def hesabla_faul(data: dict) -> dict:
 
     return result
 
-
-# ─────────────────────────────────────────
-#  KART BAZARLARI
-# ─────────────────────────────────────────
-
 def hesabla_kart(data: dict) -> dict:
     ev    = data.get("ev", {})
     qonaq = data.get("qonaq", {})
@@ -313,24 +269,16 @@ def hesabla_kart(data: dict) -> dict:
         key = f"over{str(t).replace('.', '_')}"
         result[key] = normal_over(mean, std, t)
 
-    # Tək/Cüt kart
     tek = sum(
         poisson_exact(ev_k, i) * poisson_exact(qon_k, j)
         for i in range(12) for j in range(12) if (i + j) % 2 == 1
     )
-    result["tek"] = round(tek, 4)
-    result["cut"] = round(1 - tek, 4)
-
-    # Qırmızı kart (aşağı güvən)
-    result["qirmizi_beli"] = round(min(mean * 0.08, 0.35), 4)
+    result["tek"]  = round(tek, 4)
+    result["cut"]  = round(1 - tek, 4)
+    result["qirmizi_beli"]       = round(min(mean * 0.08, 0.35), 4)
     result["qirmizi_confidence"] = "asagi"
 
     return result
-
-
-# ─────────────────────────────────────────
-#  OFSayt BAZARLARI
-# ─────────────────────────────────────────
 
 def hesabla_ofsayt(data: dict) -> dict:
     ev    = data.get("ev", {})
@@ -351,11 +299,6 @@ def hesabla_ofsayt(data: dict) -> dict:
         result[key] = normal_over(mean, std, t)
 
     return result
-
-
-# ─────────────────────────────────────────
-#  AUT BAZARLARI
-# ─────────────────────────────────────────
 
 def hesabla_aut(data: dict) -> dict:
     ev    = data.get("ev", {})
@@ -378,11 +321,6 @@ def hesabla_aut(data: dict) -> dict:
 
     return result
 
-
-# ─────────────────────────────────────────
-#  QAPIDAN ZƏRBƏ
-# ─────────────────────────────────────────
-
 def hesabla_qapidan_zerbe(data: dict) -> dict:
     ev    = data.get("ev", {})
     qonaq = data.get("qonaq", {})
@@ -404,170 +342,132 @@ def hesabla_qapidan_zerbe(data: dict) -> dict:
 
     return result
 
-
-# ─────────────────────────────────────────
-#  PENALTİ
-# ─────────────────────────────────────────
-
 def hesabla_penalti(data: dict) -> dict:
-    # Tarixi standart ehtimal — hakim çarpanı M3/M4-dən gəlir
     return {
-        "beli": 0.26,
-        "xeyr": 0.74,
-        "qeyd": "Hakim çarpanı M4-dən tətbiq ediləcək",
+        "beli":      0.26,
+        "xeyr":      0.74,
+        "qeyd":      "Hakim çarpanı M4-dən tətbiq ediləcək",
         "null_data": False
     }
-
-
-# ─────────────────────────────────────────
-#  GÜVƏN SISTEMI /10
-# ─────────────────────────────────────────
 
 def hesabla_guveni(data: dict, qol: dict, corner: dict, sot: dict) -> dict:
     ev    = data.get("ev", {})
     qonaq = data.get("qonaq", {})
 
-    # Data dolğunluğu (0-4)
-    saheler = [
-        "qol_vurdu", "qol_buraxdi", "over25", "bts",
-        "corner_ort", "sot_ort", "faul_ort", "kart_ort"
-    ]
+    saheler   = ["qol_vurdu", "qol_buraxdi", "over25", "bts",
+                 "corner_ort", "sot_ort", "faul_ort", "kart_ort"]
     ev_dolu   = sum(1 for s in saheler if safe(ev.get(s)) is not None)
     qon_dolu  = sum(1 for s in saheler if safe(qonaq.get(s)) is not None)
     dolgunluk = round((ev_dolu + qon_dolu) / (len(saheler) * 2) * 4, 2)
 
-    # Poisson dəqiqliyi (0-3)
-    poisson_bal = 0.0
-    if not qol.get("null_data"):
-        poisson_bal = 3.0
-    elif qol.get("null_data"):
-        poisson_bal = 0.0
+    poisson_bal = 3.0 if not qol.get("null_data") else 0.0
 
-    # Liqa uyğunluğu (0-3)
     liqa_ort = safe(data.get("liqa_ortalama", {}).get("qol_ort"))
     liqa_bal = 2.0 if liqa_ort is not None else 1.0
 
-    total = round(dolgunluk + poisson_bal + liqa_bal, 2)
-    total = min(10.0, total)
+    total = min(10.0, round(dolgunluk + poisson_bal + liqa_bal, 2))
 
     return {
-        "dolgunluk": dolgunluk,
+        "dolgunluk":   dolgunluk,
         "poisson_bal": poisson_bal,
-        "liqa_bal": liqa_bal,
-        "total": total
+        "liqa_bal":    liqa_bal,
+        "total":       total
     }
-
-
-# ─────────────────────────────────────────
-#  KASKAD GÜVƏN BONUSLARI
-# ─────────────────────────────────────────
 
 def qol_ferqi_bonus(ev_goz: float, qon_goz: float) -> int:
     ferg = abs(ev_goz - qon_goz)
-    if ferg < 0.4:   return -20
-    if ferg < 0.8:   return 0
-    if ferg < 1.2:   return 15
-    if ferg < 1.6:   return 25
-    if ferg < 2.0:   return 35
+    if ferg < 0.4: return -20
+    if ferg < 0.8: return 0
+    if ferg < 1.2: return 15
+    if ferg < 1.6: return 25
+    if ferg < 2.0: return 35
     return 45
 
 def corner_ferqi_bonus(ev_c: Optional[float], qon_c: Optional[float]) -> int:
     if ev_c is None or qon_c is None:
         return 0
     ferg = abs(ev_c * 1.15 - qon_c * 0.85)
-    if ferg < 1.0:   return -20
-    if ferg < 1.5:   return 0
-    if ferg < 2.0:   return 15
-    if ferg < 2.5:   return 25
-    if ferg < 3.0:   return 35
+    if ferg < 1.0: return -20
+    if ferg < 1.5: return 0
+    if ferg < 2.0: return 15
+    if ferg < 2.5: return 25
+    if ferg < 3.0: return 35
     return 45
 
-
-# ─────────────────────────────────────────
-#  ANA FUNKSIYA
-# ─────────────────────────────────────────
-
 def run_m1(parser_json: dict) -> dict:
-    """
-    Parser JSON-u alır, bütün bazarları hesablayır.
-    Çıxış M4-ə göndərilir.
-    """
     ev    = parser_json.get("ev", {})
     qonaq = parser_json.get("qonaq", {})
 
-    qol     = hesabla_qol_bazasi(parser_json)
+    qol      = hesabla_qol_bazasi(parser_json)
     bazarlar = hesabla_qol_bazarlari(qol)
-    corner  = hesabla_corner(parser_json)
-    sot     = hesabla_sot(parser_json)
-    faul    = hesabla_faul(parser_json)
-    kart    = hesabla_kart(parser_json)
-    ofsayt  = hesabla_ofsayt(parser_json)
-    aut     = hesabla_aut(parser_json)
-    qapidan = hesabla_qapidan_zerbe(parser_json)
-    penalti = hesabla_penalti(parser_json)
-    guveni  = hesabla_guveni(parser_json, qol, corner, sot)
+    corner   = hesabla_corner(parser_json)
+    sot      = hesabla_sot(parser_json)
+    faul     = hesabla_faul(parser_json)
+    kart     = hesabla_kart(parser_json)
+    ofsayt   = hesabla_ofsayt(parser_json)
+    aut      = hesabla_aut(parser_json)
+    qapidan  = hesabla_qapidan_zerbe(parser_json)
+    penalti  = hesabla_penalti(parser_json)
+    guveni   = hesabla_guveni(parser_json, qol, corner, sot)
 
-    # Kaskad bonuslar
     ev_oyun  = safe(ev.get("oyun_sayi")) or 16
     qon_oyun = safe(qonaq.get("oyun_sayi")) or 16
 
-    ev_vurdu   = safe(ev.get("qol_vurdu")) or 0
-    ev_buraxdi = safe(ev.get("qol_buraxdi")) or 0
-    qon_vurdu  = safe(qonaq.get("qol_vurdu")) or 0
-    qon_buraxdi= safe(qonaq.get("qol_buraxdi")) or 0
+    ev_v  = safe(ev.get("qol_vurdu")) or 0
+    ev_b  = safe(ev.get("qol_buraxdi")) or 0
+    qon_v = safe(qonaq.get("qol_vurdu")) or 0
+    qon_b = safe(qonaq.get("qol_buraxdi")) or 0
 
-    ev_vurdu_ort   = ev_vurdu / ev_oyun
-    ev_buraxdi_ort = ev_buraxdi / ev_oyun
-    qon_vurdu_ort  = qon_vurdu / qon_oyun
-    qon_buraxdi_ort= qon_buraxdi / qon_oyun
+    if ev_v > 5:
+        ev_v = ev_v / ev_oyun
+        ev_b = ev_b / ev_oyun
+    if qon_v > 5:
+        qon_v = qon_v / qon_oyun
+        qon_b = qon_b / qon_oyun
 
-    ev_goz  = (ev_vurdu_ort + qon_buraxdi_ort) / 2
-    qon_goz = (qon_vurdu_ort + ev_buraxdi_ort) / 2
-    ev_c    = safe(parser_json.get("ev", {}).get("corner_ort"))
-    qon_c   = safe(parser_json.get("qonaq", {}).get("corner_ort"))
+    ev_goz  = (ev_v + qon_b) / 2
+    qon_goz = (qon_v + ev_b) / 2
+    ev_c    = safe(ev.get("corner_ort"))
+    qon_c   = safe(qonaq.get("corner_ort"))
 
     bonus_qol    = qol_ferqi_bonus(ev_goz, qon_goz)
     bonus_corner = corner_ferqi_bonus(ev_c, qon_c)
 
-    # Null flagları
-    null_fields = []
-    for sahə in ["sot_ort", "faul_ort", "kart_ort", "ofsayt_ort", "aut_ort", "qapidan_zerbe_ort"]:
-        if safe(parser_json.get("ev", {}).get(sahə)) is None:
-            null_fields.append(sahə)
+    null_fields = [
+        s for s in ["sot_ort", "faul_ort", "kart_ort",
+                    "ofsayt_ort", "aut_ort", "qapidan_zerbe_ort"]
+        if safe(ev.get(s)) is None
+    ]
 
     return {
-        "qol_bazasi": qol,
+        "qol_bazasi":    qol,
         "qol_bazarlari": bazarlar,
-        "corner": corner,
-        "sot": sot,
-        "faul": faul,
-        "kart": kart,
-        "ofsayt": ofsayt,
-        "aut": aut,
+        "corner":        corner,
+        "sot":           sot,
+        "faul":          faul,
+        "kart":          kart,
+        "ofsayt":        ofsayt,
+        "aut":           aut,
         "qapidan_zerbe": qapidan,
-        "penalti": penalti,
-        "guveni": guveni,
+        "penalti":       penalti,
+        "guveni":        guveni,
         "bonuslar": {
-            "qol_ferqi": bonus_qol,
+            "qol_ferqi":    bonus_qol,
             "corner_ferqi": bonus_corner
         },
         "null_fields": null_fields
     }
 
-
-# ─────────────────────────────────────────
-#  TEST
-# ─────────────────────────────────────────
-
 if __name__ == "__main__":
     test_data = {
         "ev": {
-            "ad": "Mirandes",
-            "qol_vurdu": 0.88,
-            "qol_buraxdi": 1.56,
-            "over25": 50,
-            "bts": 56,
-            "corner_ort": 9.44,
+            "ad": "Las Palmas",
+            "qol_vurdu": 24,
+            "qol_buraxdi": 11,
+            "oyun_sayi": 16,
+            "over25": 41,
+            "bts": 53,
+            "corner_ort": 4.75,
             "sot_ort": None,
             "faul_ort": None,
             "kart_ort": None,
@@ -576,12 +476,13 @@ if __name__ == "__main__":
             "qapidan_zerbe_ort": None
         },
         "qonaq": {
-            "ad": "Albacete",
-            "qol_vurdu": 1.12,
-            "qol_buraxdi": 1.31,
-            "over25": 55,
-            "bts": 58,
-            "corner_ort": 8.20,
+            "ad": "Granada",
+            "qol_vurdu": 17,
+            "qol_buraxdi": 18,
+            "oyun_sayi": 16,
+            "over25": 41,
+            "bts": 53,
+            "corner_ort": 6.0,
             "sot_ort": None,
             "faul_ort": None,
             "kart_ort": None,
@@ -590,13 +491,12 @@ if __name__ == "__main__":
             "qapidan_zerbe_ort": None
         },
         "liqa_ortalama": {
-            "qol_ort": 2.45
+            "qol_ort": 2.59
         },
         "h2h": {
-            "ort_qol": 2.1
+            "ort_qol": 1.67
         }
     }
 
     result = run_m1(test_data)
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    
