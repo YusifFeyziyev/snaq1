@@ -141,6 +141,7 @@ def analyze():
     try:
         log.info("M4 başladı...")
         m4_result = run_m4(m1_result, m2_result, m3_result, parser_json)
+        m4_result = m4_result.get("data", m4_result) if isinstance(m4_result, dict) and "data" in m4_result else m4_result
         log.info("M4 tamamlandı.")
     except Exception as e:
         log.error(f"M4 xətası: {e}")
