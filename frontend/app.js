@@ -96,16 +96,28 @@ const MARKET_KEYS = [
 function fillMarkets(m4) {
   const bz = m4.bazarlar || {};
 
-  MARKET_KEYS.forEach(key => {
-    const el    = document.getElementById(`body-${key}`);
-    if (!el) return;
-    const items = bz[key] || [];
+  function objToArray(obj) {
+    if (Array.isArray(obj)) return obj;
+    if (!obj || typeof obj !== 'object') return [];
+    return Object.entries(obj).map(([key, val]) => ({
+      ad: key,
+      ehtimal: val.ehtimal ?? 0,
+      sebeb: val.sebeb || "",
+      modul: val.dominant_modul || "",
+      bloker: val.ehtimal === 0 || val.qerar === "⛔"
+    }));
+  }
 
+  MARKET_KEYS.forEach(key => {
+    const el = document.getElementById(`body-${key}`);
+    if (!el) return;
+    const items = objToArray(bz[key]);
     el.innerHTML = items.length
       ? items.map(marketRow).join("")
       : `<p class="c-muted" style="padding:12px 0;font-size:13px">Məlumat yoxdur</p>`;
   });
 }
+
 
 // ─────────────────────────────────────────
 // TOP TÖVSİYƏLƏR
