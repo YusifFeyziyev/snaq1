@@ -2,6 +2,8 @@ import json
 import re
 import os
 import sys
+
+# config.py faylını oxumaq üçün ana qovluğu path-ə əlavə edirik
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import GROQ_KEY_M4, MODEL_M4
 from groq import Groq
@@ -62,6 +64,8 @@ HƏR BAZAR ÜÇÜN QAYTAR:
 - sebeb (qısa)
 - dominant_modul: "M1" / "M3" / "M2"
 - bloker_sebeb (yalnız ⛔ olduqda)
+
+QƏTİ XƏBƏRDARLIQ: Qətiyyən markdown (` ```json ` və s.) istifadə etmə. Fikirlərini <think> blokunda yaz, amma yekunda BİRBAŞA { ilə başlayan JSON obyekti qaytar.
 
 YALNIZ bu JSON formatında qaytar — heç bir izah yazma:
 {
@@ -126,34 +130,51 @@ YALNIZ bu JSON formatında qaytar — heç bir izah yazma:
       "p2": {"ehtimal": 0.0, "guveni": 0.0, "qerar": null, "sebeb": null, "dominant_modul": null}
     }
   },
-  "top_tavsiyeler": []
+  "top_tavsiyeler": [
+    {"bazar": "Məsələn: Over 2.5", "ehtimal": 0.0, "qerar": "✅✅ Çox güvənli"}
+  ]
 }
 """
 
-
 def hazirla_m4_input(m1: dict, m2: dict, m3: dict) -> dict:
-    qol = m1.get("qol_bazarlari", {})
-    corner = m1.get("corner", {})
-    kart = m1.get("kart", {})
-    faul = m1.get("faul", {})
-    m3_data = m3.get("data", {}) if isinstance(m3, dict) else m3
-    m2_data = m2.get("data", {}) if isinstance(m2, dict) else m2
+    # Təhlükəsiz Data Çıxarışı (NoneType Error-un qarşısını almaq üçün)
+    m1 = m1 or {}
+    m2 = m2 or {}
+    m3 = m3 or {}
 
-    flags = m3_data.get("flags", {}) if m3_data else {}
+    # M1 Dataları
+    qol_bazarlari = m1.get("qol_bazarlari") or {}
+    qol_bazasi = m1.get("qol_bazasi") or {}
+    corner = m1.get("corner") or {}
+    kart = m1.get("kart") or {}
+    faul = m1.get("faul") or {}
+    ht = qol_bazarlari.get("ht") or {}
+    guveni_m1 = (m1.get("guveni") or {}).get("total", 0)
+
+    # M3 Dataları
+    m3_data = m3.get("data") if isinstance(m3, dict) and "data" in m3 else m3
+    m3_data = m3_data or {}
+    flags = m3_data.get("flags") or {}
+    guveni_m3 = m3_data.get("m3_guveni", 0)
+
+    # M2 Dataları
+    m2_data = m2.get("data") if isinstance(m2, dict) and "data" in m2 else m2
+    m2_data = m2_data or {}
+    guveni_m2 = m2.get("guveni", 0) if isinstance(m2, dict) else 0
 
     return {
         "M1": {
-            "over15": qol.get("over15"),
-            "over25": qol.get("over25"),
-            "over35": qol.get("over35"),
-            "btts": qol.get("btts"),
-            "btts_xeyr": qol.get("btts_xeyr"),
-            "p1": qol.get("p1"),
-            "px": qol.get("px"),
-            "p2": qol.get("p2"),
-            "p1x": qol.get("p1x"),
-            "px2": qol.get("px2"),
-            "p12": qol.get("p12"),
+            "over15": qol_bazarlari.get("over15"),
+            "over25": qol_bazarlari.get("over25"),
+            "over35": qol_bazarlari.get("over35"),
+            "btts": qol_bazarlari.get("btts"),
+            "btts_xeyr": qol_bazarlari.get("btts_xeyr"),
+            "p1": qol_bazarlari.get("p1"),
+            "px": qol_bazarlari.get("px"),
+            "p2": qol_bazarlari.get("p2"),
+            "p1x": qol_bazarlari.get("p1x"),
+            "px2": qol_bazarlari.get("px2"),
+            "p12": qol_bazarlari.get("p12"),
             "corner_ort": corner.get("ortalama"),
             "corner_over95": corner.get("over9_5"),
             "corner_over105": corner.get("over10_5"),
@@ -161,40 +182,39 @@ def hazirla_m4_input(m1: dict, m2: dict, m3: dict) -> dict:
             "kart_over25": kart.get("over2_5"),
             "kart_over35": kart.get("over3_5"),
             "faul_over205": faul.get("over20_5"),
-            "ht_over05": m1.get("qol_bazarlari", {}).get("ht", {}).get("over05"),
-            "ht_over15": m1.get("qol_bazarlari", {}).get("ht", {}).get("over15"),
-            "xam_baza": m1.get("qol_bazasi", {}).get("final_baza"),
-            "guveni": m1.get("guveni", {}).get("total"),
+            "ht_over05": ht.get("over05"),
+            "ht_over15": ht.get("over15"),
+            "xam_baza": qol_bazasi.get("final_baza"),
+            "guveni": guveni_m1,
             "null_fields": m1.get("null_fields", []),
-            "null_data": m1.get("qol_bazasi", {}).get("null_data", False)
+            "null_data": qol_bazasi.get("null_data", False)
         },
         "M3": {
-            "tempo": m3_data.get("tempo") if m3_data else None,
-            "taktika_ev": m3_data.get("taktika_ev") if m3_data else None,
-            "taktika_qonaq": m3_data.get("taktika_qonaq") if m3_data else None,
-            "dominant_teref": m3_data.get("dominant_teref") if m3_data else None,
-            "qol_veziyyeti": m3_data.get("qol_veziyyeti") if m3_data else None,
-            "oyun_oxunusu": m3_data.get("oyun_oxunusu") if m3_data else None,
-            "kahin_cumlesi": m3_data.get("kahin_cumlesi") if m3_data else None,
-            "carpanlar": m3_data.get("carpanlar") if m3_data else None,
-            "guveni": m3_data.get("m3_guveni", 0) if m3_data else 0
+            "tempo": m3_data.get("tempo"),
+            "taktika_ev": m3_data.get("taktika_ev"),
+            "taktika_qonaq": m3_data.get("taktika_qonaq"),
+            "dominant_teref": m3_data.get("dominant_teref"),
+            "qol_veziyyeti": m3_data.get("qol_veziyyeti"),
+            "oyun_oxunusu": m3_data.get("oyun_oxunusu"),
+            "kahin_cumlesi": m3_data.get("kahin_cumlesi"),
+            "carpanlar": m3_data.get("carpanlar"),
+            "guveni": guveni_m3
         },
         "M2": {
-            "hakim_sertlik": m2_data.get("hakim_sertlik") if m2_data else None,
+            "hakim_sertlik": m2_data.get("hakim_sertlik"),
             "kritik_itki": flags.get("kritik_itki", False),
             "rotasiya": flags.get("rotasiya", False),
-            "guveni": m2.get("guveni", 0) if isinstance(m2, dict) else 0
+            "guveni": guveni_m2
         },
         "flags": {
             "bus_stop": flags.get("bus_stop", False),
             "rotasiya": flags.get("rotasiya", False),
             "kritik_itki": flags.get("kritik_itki", False),
             "kritik_itki_sayi": flags.get("kritik_itki_sayi", 0),
-            "null_data": m1.get("qol_bazasi", {}).get("null_data", False),
-            "m2_zeyif": m2.get("guveni", 0) < 5.0 if isinstance(m2, dict) else True
+            "null_data": qol_bazasi.get("null_data", False),
+            "m2_zeyif": guveni_m2 < 5.0
         }
     }
-
 
 def run_m4(m1: dict, m2: dict, m3: dict, parser_json: dict=None) -> dict:
     m4_input = hazirla_m4_input(m1, m2, m3)
@@ -214,13 +234,18 @@ def run_m4(m1: dict, m2: dict, m3: dict, parser_json: dict=None) -> dict:
 
         # DeepSeek <think> bloklarını təmizlə
         content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+        
+        # Bəzən model ```json ... ``` içində qaytarır. Onu da təmizləyək.
+        content = content.replace("```json", "").replace("```", "").strip()
 
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if not json_match:
-            return {"success": False, "error": "JSON tapılmadı"}
+            return {"success": False, "error": "JSON strukturu tapılmadı. AI cavabı düzgün deyil.", "raw": content}
 
         m4_data = json.loads(json_match.group())
         return {"success": True, "data": m4_data}
 
+    except json.JSONDecodeError as e:
+        return {"success": False, "error": f"JSON parse xətası: {str(e)}", "raw": content}
     except Exception as e:
         return {"success": False, "error": str(e)}
