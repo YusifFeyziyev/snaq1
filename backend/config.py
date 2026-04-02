@@ -14,7 +14,7 @@ TAVILY_KEY  = os.getenv("TAVILY_KEY")
 SERPER_KEY  = os.getenv("SERPER_KEY")
 
 # MODEL ADLARI
-MODEL_PARSER = "llama-3.1-8b-instant"
-MODEL_M2     = "llama-3.1-8b-instant"
+MODEL_PARSER = "llama-3.3-70b-versatile"
+MODEL_M2     = "llama-3.3-70b-versatile"
 MODEL_M3     = "llama-3.3-70b-versatile"
 MODEL_M4     = "llama-3.3-70b-versatile"
