@@ -142,16 +142,26 @@ def safe_json_parse(text: str) -> Dict:
         return json.loads(json_str)
     except json.JSONDecodeError as e:
         print(f"JSON parse xətası: {e}. Fallback edilir...")
-        return {
-            "referee": {"status": "tapılmadı", "confidence": 0.0},
-            "coach": {"status": "tapılmadı", "confidence": 0.0},
-            "injuries": {"status": "tapılmadı", "confidence": 0.0},
-            "lineup": {"status": "tapılmadı", "confidence": 0.0},
-            "stadium": {"status": "tapılmadı", "confidence": 0.0},
-            "weather": {"status": "tapılmadı", "confidence": 0.0},
-            "motivation": {"status": "tapılmadı", "confidence": 0.0},
-            "fatigue": {"status": "tapılmadı", "confidence": 0.0}
-        }
+        fallback = {
+        "referee":    {"status": "tapılmadı", "confidence": 0.0},
+        "coach":      {"status": "tapılmadı", "confidence": 0.0},
+        "injuries":   {"status": "tapılmadı", "confidence": 0.0},
+        "lineup":     {"status": "tapılmadı", "confidence": 0.0},
+        "stadium":    {"status": "tapılmadı", "confidence": 0.0},
+        "weather":    {"status": "tapılmadı", "confidence": 0.0},
+        "motivation": {"status": "tapılmadı", "confidence": 0.0},
+        "fatigue":    {"status": "tapılmadı", "confidence": 0.0}
+    }
+    # Regex ilə hakim adını xilas etməyə cəhd et
+    import re
+    referee_match = re.search(r'"referee"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"', text)
+    if referee_match:
+        fallback["referee"]["name"] = referee_match.group(1)
+        fallback["referee"]["status"] = "təxmin"
+        fallback["referee"]["confidence"] = 0.5
+    return fallback
+
+    
 
 # ✅ DÜZƏLİŞ: m2_guveni hesablayan köməkçi funksiya
 def calculate_m2_guveni(result: Dict) -> float:
