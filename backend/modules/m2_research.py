@@ -257,17 +257,4 @@ def run_m2(parser_json: dict) -> dict:
         "guveni": guveni,
         "axtaris_statuslari": axtaris_statuslari
     }
-
-
-# ─────────────────────────────────────────
-#  TEST
-# ─────────────────────────────────────────
-
-if __name__ == "__main__":
-    test_parser = {
-        "ev": {"ad": "Mirandes", "liqa": "LaLiga2"},
-        "qonaq": {"ad": "Albacete"},
-        "oyun_info": {"tarix": "2024-01-05", "liqa": "LaLiga2"}
-    }
-    result = run_m2(test_parser)
     print(json.dumps(result, ensure_ascii=False, indent=2))

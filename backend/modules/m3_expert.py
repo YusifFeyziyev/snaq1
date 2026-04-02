@@ -176,36 +176,6 @@ Yuxarıdakı məlumatlara əsasən ekspert analizini JSON formatında ver.
 
     except Exception as e:
         return {"success": False, "error": str(e)}
+    
+    
 
-
-if __name__ == "__main__":
-    test_parser = {
-        "ev": {
-            "ad": "Mirandes",
-            "qol_vurdu": 0.88, "qol_buraxdi": 1.56,
-            "over25": 50, "bts": 56,
-            "corner_ort": 9.44, "cedvel_sirasi": 21,
-            "forma_son8": ["W","L","D","L","W","L","D","L"]
-        },
-        "qonaq": {
-            "ad": "Albacete",
-            "qol_vurdu": 1.12, "qol_buraxdi": 1.31,
-            "over25": 55, "bts": 58,
-            "corner_ort": 8.20, "cedvel_sirasi": 8
-        },
-        "liqa_ortalama": {"qol_ort": 2.45}
-    }
-
-    test_m2 = {
-        "hakim": {"ad": None, "status": "tapılmadı", "confidence": 0.0},
-        "hakim_sertlik": {"value": None, "status": "tapılmadı", "confidence": 0.0},
-        "ev_mesqci": {"ad": None, "taktika_tipi": None, "status": "tapılmadı", "confidence": 0.0},
-        "qonaq_mesqci": {"ad": None, "taktika_tipi": None, "status": "tapılmadı", "confidence": 0.0},
-        "travma_ev": {"oyuncular": [], "status": "tapılmadı", "confidence": 0.0},
-        "travma_qonaq": {"oyuncular": [], "status": "tapılmadı", "confidence": 0.0},
-        "rotasiya_ev": {"value": False, "status": "tapılmadı", "confidence": 0.0},
-        "rotasiya_qonaq": {"value": False, "status": "tapılmadı", "confidence": 0.0}
-    }
-
-    result = run_m3(test_parser, test_m2)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
