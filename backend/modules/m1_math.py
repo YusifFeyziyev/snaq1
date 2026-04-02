@@ -1,502 +1,604 @@
 import math
 import json
-from typing import Optional
+from typing import Dict, List, Any, Tuple
 
-def poisson_prob(lam: float, k: int) -> float:
+# ========== SCIPY YOXLANMASI (əgər varsa, normal paylanma üçün, yoxsa fallback) ==========
+try:
+    from scipy.stats import norm
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
+# ========== KÖMƏKÇİ FUNKSİYALAR ==========
+
+def poisson_probability(lam: float, k: int) -> float:
+    """Poisson ehtimalı: P(X=k) = (e^-lam * lam^k) / k!"""
     if lam <= 0:
-        return 0.0
+        return 1.0 if k == 0 else 0.0
     return (math.exp(-lam) * (lam ** k)) / math.factorial(k)
 
-def poisson_over(lam: float, threshold: float) -> float:
-    k = int(threshold + 0.5)
-    under = sum(poisson_prob(lam, i) for i in range(k + 1))
-    return round(max(0.0, min(1.0, 1.0 - under)), 4)
+def poisson_cumulative(lam: float, k: int, lower_tail: bool = True) -> float:
+    """Poisson yığılmış ehtimal: P(X <= k) və ya P(X > k)"""
+    if lam <= 0:
+        return 1.0 if k >= 0 else 0.0
+    cum = sum(poisson_probability(lam, i) for i in range(k + 1))
+    return cum if lower_tail else 1 - cum
 
-def poisson_exact(lam: float, k: int) -> float:
-    return round(poisson_prob(lam, k), 4)
+def poisson_over_probability(lam: float, line: float) -> float:
+    """Over X.5 ehtimalı (Poisson ilə)"""
+    target = math.ceil(line)
+    return 1 - poisson_cumulative(lam, target - 1)
 
-def normal_over(mean: float, std: float, threshold: float) -> float:
-    if std <= 0:
-        return 0.5
-    z = (threshold - mean) / std
-    prob_under = 0.5 * (1 + math.erf(z / math.sqrt(2)))
-    return round(max(0.0, min(1.0, 1.0 - prob_under)), 4)
+def poisson_under_probability(lam: float, line: float) -> float:
+    """Under X.5 ehtimalı"""
+    target = math.floor(line)
+    return poisson_cumulative(lam, target)
 
-def safe(val, default=None):
-    return val if val is not None else default
+def normal_over_probability(mean: float, std: float, line: float) -> float:
+    """Normal paylanma ilə over ehtimalı (scipy varsa, yoxsa Poisson fallback)"""
+    if SCIPY_AVAILABLE and std > 0:
+        return 1 - norm.cdf(line, loc=mean, scale=std)
+    else:
+        return poisson_over_probability(mean, line)
 
-def get_damping(liqa_qol_ort: Optional[float]) -> float:
-    if liqa_qol_ort is None:
-        return 0.92
-    if liqa_qol_ort < 2.2:
-        return 0.88
-    return 0.92
+def dampen_poisson(lam: float, confidence: float, target_mean: float = 1.0) -> float:
+    """
+    Poisson damping: aşağı güvəndə target_mean dəyərinə doğru çəkir.
+    confidence: 0-1 arası, 1 tam real, 0 tam damping.
+    target_mean: damping ediləcək hədəf ortalama.
+    """
+    if confidence >= 1:
+        return lam
+    if confidence <= 0:
+        return target_mean
+    return lam * confidence + target_mean * (1 - confidence)
 
-def hesabla_qol_bazasi(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-    liqa  = data.get("liqa_ortalama", {})
+def calculate_h2h_weight(h2h_stats: Dict) -> float:
+    """
+    H2H çəkisi: son 5 qarşılaşmaya baxır, qol fərqi, qalibiyyət trendi.
+    Sample factor əlavə edildi: az sayda oyun varsa təsir azalır.
+    Qaytarır: 0.5-1.5 arası çarpan
+    """
+    if not h2h_stats or 'matches' not in h2h_stats:
+        return 1.0
+    
+    matches = h2h_stats.get('matches', [])
+    if not matches:
+        return 1.0
+    
+    total_goals_home = 0
+    total_goals_away = 0
+    
+    for m in matches[-5:]:  # son 5
+        home_goals = m.get('home_goals', 0)
+        away_goals = m.get('away_goals', 0)
+        total_goals_home += home_goals
+        total_goals_away += away_goals
+    
+    n = len(matches)
+    if n == 0:
+        return 1.0
+    
+    avg_home = total_goals_home / n
+    avg_away = total_goals_away / n
+    advantage = avg_home - avg_away  # müsbət ev üstünlüyü
+    
+    # Sample factor: nə qədər çox oyun, bir o qədər etibarlı
+    sample_factor = min(1.0, n / 5.0)
+    
+    # Çarpan: 0.5 (çox pis) - 1.5 (çox yaxşı)
+    weight = 1.0 + (advantage / 3.0) * sample_factor
+    return max(0.5, min(1.5, weight))
 
-    ev_vurdu    = safe(ev.get("qol_vurdu"))
-    ev_buraxdi  = safe(ev.get("qol_buraxdi"))
-    qon_vurdu   = safe(qonaq.get("qol_vurdu"))
-    qon_buraxdi = safe(qonaq.get("qol_buraxdi"))
-    liqa_ort    = safe(liqa.get("qol_ort"))
+# ========== ƏSAS HESABLAMA FUNKSİYALARI ==========
 
-    if None in [ev_vurdu, ev_buraxdi, qon_vurdu, qon_buraxdi]:
-        return {"null_data": True, "sebeb": "qol_vurdu/buraxdi null"}
-
-    ev_oyun  = safe(ev.get("oyun_sayi")) or 16
-    qon_oyun = safe(qonaq.get("oyun_sayi")) or 16
-
-    # Əgər dəyər 5-dən böyükdürsə toplam kimi qəbul et
-    if ev_vurdu > 5:
-        ev_vurdu   = ev_vurdu / ev_oyun
-        ev_buraxdi = ev_buraxdi / ev_oyun
-    if qon_vurdu > 5:
-        qon_vurdu   = qon_vurdu / qon_oyun
-        qon_buraxdi = qon_buraxdi / qon_oyun
-
-    ev_goz   = (ev_vurdu + qon_buraxdi) / 2
-    qon_goz  = (qon_vurdu + ev_buraxdi) / 2
-    xam_baza = ev_goz + qon_goz
-
-    damping = get_damping(liqa_ort)
-
-    h2h      = data.get("h2h", {})
-    h2h_ort  = safe(h2h.get("ort_qol"))
-    h2h_ceki = 0.15
-    if h2h_ort is not None:
-        xam_baza = xam_baza * (1 - h2h_ceki) + h2h_ort * h2h_ceki
-        if h2h_ort < 1.5:
-            damping *= 0.92
-
-    final_baza = xam_baza * damping
-
+def calculate_1x2(team1_stats: Dict, team2_stats: Dict, h2h_weight: float = 1.0) -> Dict:
+    """
+    1X2 bazarı üçün ehtimallar (ev, heç-heçə, qonaq)
+    Poisson modeli əsasında, düzgün normalizasiya ilə.
+    """
+    home_attack = team1_stats.get('attack_strength', 1.0)
+    home_defense = team1_stats.get('defense_strength', 1.0)
+    away_attack = team2_stats.get('attack_strength', 1.0)
+    away_defense = team2_stats.get('defense_strength', 1.0)
+    
+    league_home_avg = team1_stats.get('league_home_avg_goals', 1.5)
+    league_away_avg = team2_stats.get('league_away_avg_goals', 1.2)
+    
+    # Expected goals
+    lambda_home = home_attack * away_defense * league_home_avg
+    lambda_away = away_attack * home_defense * league_away_avg
+    
+    # Damping (ehtiyat)
+    lambda_home = max(0.2, min(4.0, lambda_home))
+    lambda_away = max(0.2, min(4.0, lambda_away))
+    
+    # H2H çəkisi ilə tənzimləmə
+    lambda_home *= h2h_weight
+    lambda_away /= max(0.5, h2h_weight)  # qonaq zəifləyir, sıfıra bölmə qarşısı
+    
+    # Dinamik limit: maksimum 12 qol və ya ortalama*3
+    max_goals = max(10, int(max(lambda_home, lambda_away) * 3) + 1)
+    
+    prob_home = 0.0
+    prob_draw = 0.0
+    prob_away = 0.0
+    
+    for i in range(0, max_goals + 1):
+        for j in range(0, max_goals + 1):
+            p = poisson_probability(lambda_home, i) * poisson_probability(lambda_away, j)
+            if i > j:
+                prob_home += p
+            elif i == j:
+                prob_draw += p
+            else:
+                prob_away += p
+    
+    # Normalizasiya (cəm 1 olsun)
+    total = prob_home + prob_draw + prob_away
+    if total > 0:
+        prob_home /= total
+        prob_draw /= total
+        prob_away /= total
+    
     return {
-        "ev_goz":     round(ev_goz, 3),
-        "qon_goz":    round(qon_goz, 3),
-        "xam_baza":   round(xam_baza, 3),
-        "final_baza": round(final_baza, 3),
-        "null_data":  False
+        "home_win": round(prob_home, 4),
+        "draw": round(prob_draw, 4),
+        "away_win": round(prob_away, 4)
     }
 
-def hesabla_qol_bazarlari(qol: dict) -> dict:
-    if qol.get("null_data"):
-        return {"null_data": True}
-
-    ev_lam  = qol["ev_goz"]
-    qon_lam = qol["qon_goz"]
-    total   = qol["final_baza"]
-
-    result = {
-        "over15":   poisson_over(total, 1.5),
-        "over25":   poisson_over(total, 2.5),
-        "over35":   poisson_over(total, 3.5),
-        "over45":   poisson_over(total, 4.5),
-        "under25":  round(1 - poisson_over(total, 2.5), 4),
-        "under35":  round(1 - poisson_over(total, 3.5), 4),
-        "under45":  round(1 - poisson_over(total, 4.5), 4),
-        "under55":  round(1 - poisson_over(total, 5.5), 4),
-        "btts":     round((1 - poisson_prob(ev_lam, 0)) * (1 - poisson_prob(qon_lam, 0)), 4),
-        "btts_xeyr": round(
-            poisson_prob(ev_lam, 0) + poisson_prob(qon_lam, 0) -
-            poisson_prob(ev_lam, 0) * poisson_prob(qon_lam, 0), 4
-        ),
-        "null_data": False
-    }
-
-    tek = sum(
-        poisson_exact(ev_lam, i) * poisson_exact(qon_lam, j)
-        for i in range(8) for j in range(8) if (i + j) % 2 == 1
-    )
-    result["tek_qol"] = round(tek, 4)
-    result["cut_qol"] = round(1 - tek, 4)
-
-    deqiq = {}
-    for ev_q in range(5):
-        for qon_q in range(5):
-            key = f"{ev_q}-{qon_q}"
-            deqiq[key] = round(
-                poisson_exact(ev_lam, ev_q) *
-                poisson_exact(qon_lam, qon_q), 4
-            )
-    result["deqiq_hesab"] = deqiq
-
-    ev_qelib = sum(
-        poisson_exact(ev_lam, i) * poisson_exact(qon_lam, j)
-        for i in range(8) for j in range(8) if i > j
-    )
-    beraberlik = sum(
-        poisson_exact(ev_lam, i) * poisson_exact(qon_lam, j)
-        for i in range(8) for j in range(8) if i == j
-    )
-    result["p1"]  = round(ev_qelib, 4)
-    result["px"]  = round(beraberlik, 4)
-    result["p2"]  = round(1 - ev_qelib - beraberlik, 4)
-    result["p1x"] = round(ev_qelib + beraberlik, 4)
-    result["px2"] = round(beraberlik + (1 - ev_qelib - beraberlik), 4)
-    result["p12"] = round(ev_qelib + (1 - ev_qelib - beraberlik), 4)
-
-    result["ev_klean"]  = round(poisson_prob(qon_lam, 0), 4)
-    result["qon_klean"] = round(poisson_prob(ev_lam, 0), 4)
-
-    ev_ht    = ev_lam * 0.45
-    qon_ht   = qon_lam * 0.45
-    total_ht = ev_ht + qon_ht
-    result["ht"] = {
-        "over05": poisson_over(total_ht, 0.5),
-        "over15": poisson_over(total_ht, 1.5),
-        "over25": poisson_over(total_ht, 2.5),
-        "p1": round(sum(
-            poisson_exact(ev_ht, i) * poisson_exact(qon_ht, j)
-            for i in range(6) for j in range(6) if i > j
-        ), 4),
-        "px": round(sum(
-            poisson_exact(ev_ht, i) * poisson_exact(qon_ht, j)
-            for i in range(6) for j in range(6) if i == j
-        ), 4),
-    }
-    result["ht"]["p2"] = round(1 - result["ht"]["p1"] - result["ht"]["px"], 4)
-
-    result["kombine"] = {
-        "over25_btts": round(result["over25"] * result["btts"] * 0.95, 4),
-        "p1_over25":   round(result["p1"]     * result["over25"] * 0.95, 4),
-        "p1_btts":     round(result["p1"]     * result["btts"]   * 0.95, 4),
-        "p2_over25":   round(result["p2"]     * result["over25"] * 0.95, 4),
-    }
-
-    return result
-
-def hesabla_corner(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    ev_c  = safe(ev.get("corner_ort"))
-    qon_c = safe(qonaq.get("corner_ort"))
-
-    if ev_c is None or qon_c is None:
-        return {"null_data": True}
-
-    ev_adj  = ev_c * 1.15
-    qon_adj = qon_c * 0.85
-    mean    = ev_adj + qon_adj
-    std     = mean * 0.30
-
-    result = {"null_data": False, "ortalama": round(mean, 2)}
-    for t in [7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5]:
-        key = f"over{str(t).replace('.', '_')}"
-        result[key] = normal_over(mean, std, t)
-
-    tek = sum(
-        poisson_exact(ev_adj, i) * poisson_exact(qon_adj, j)
-        for i in range(20) for j in range(20) if (i + j) % 2 == 1
-    )
-    result["tek"] = round(tek, 4)
-    result["cut"] = round(1 - tek, 4)
-
-    ev_ht_c  = ev_adj * 0.45
-    qon_ht_c = qon_adj * 0.45
-    mean_ht  = ev_ht_c + qon_ht_c
-    result["ht"] = {}
-    for t in [3.5, 4.5, 5.5]:
-        key = f"over{str(t).replace('.', '_')}"
-        result["ht"][key] = normal_over(mean_ht, mean_ht * 0.30, t)
-
-    result["p1"] = normal_over(ev_adj - qon_adj, std * 0.7, 0)
-    result["p2"] = normal_over(qon_adj - ev_adj, std * 0.7, 0)
-    result["px"] = round(1 - result["p1"] - result["p2"], 4)
-
-    return result
-
-def hesabla_sot(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    ev_s  = safe(ev.get("sot_ort"))
-    qon_s = safe(qonaq.get("sot_ort"))
-
-    if ev_s is None or qon_s is None:
-        return {"null_data": True}
-
-    ev_adj  = ev_s * 1.12
-    qon_adj = qon_s * 0.88
-    mean    = ev_adj + qon_adj
-    std     = mean * 0.28
-
-    result = {"null_data": False, "ortalama": round(mean, 2)}
-    for t in [7.5, 8.5, 9.5, 10.5, 11.5]:
-        key = f"over{str(t).replace('.', '_')}"
-        result[key] = normal_over(mean, std, t)
-
-    return result
-
-def hesabla_faul(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    ev_f  = safe(ev.get("faul_ort"))
-    qon_f = safe(qonaq.get("faul_ort"))
-
-    if ev_f is None or qon_f is None:
-        return {"null_data": True}
-
-    mean = ev_f + qon_f
-    std  = mean * 0.25
-
-    result = {"null_data": False, "ortalama": round(mean, 2)}
-    for t in [20.5, 22.5, 24.5]:
-        key = f"over{str(t).replace('.', '_')}"
-        result[key] = normal_over(mean, std, t)
-
-    return result
-
-def hesabla_kart(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    ev_k  = safe(ev.get("kart_ort"))
-    qon_k = safe(qonaq.get("kart_ort"))
-
-    if ev_k is None or qon_k is None:
-        return {"null_data": True}
-
-    mean = ev_k + qon_k
-    std  = mean * 0.30
-
-    result = {"null_data": False, "ortalama": round(mean, 2)}
-    for t in [2.5, 3.5, 4.5]:
-        key = f"over{str(t).replace('.', '_')}"
-        result[key] = normal_over(mean, std, t)
-
-    tek = sum(
-        poisson_exact(ev_k, i) * poisson_exact(qon_k, j)
-        for i in range(12) for j in range(12) if (i + j) % 2 == 1
-    )
-    result["tek"]  = round(tek, 4)
-    result["cut"]  = round(1 - tek, 4)
-    result["qirmizi_beli"]       = round(min(mean * 0.08, 0.35), 4)
-    result["qirmizi_confidence"] = "asagi"
-
-    return result
-
-def hesabla_ofsayt(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    ev_o  = safe(ev.get("ofsayt_ort"))
-    qon_o = safe(qonaq.get("ofsayt_ort"))
-
-    if ev_o is None or qon_o is None:
-        return {"null_data": True}
-
-    mean = ev_o + qon_o
-    std  = mean * 0.35
-
-    result = {"null_data": False, "ortalama": round(mean, 2)}
-    for t in [1.5, 2.5, 3.5]:
-        key = f"over{str(t).replace('.', '_')}"
-        result[key] = normal_over(mean, std, t)
-
-    return result
-
-def hesabla_aut(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    ev_a  = safe(ev.get("aut_ort"))
-    qon_a = safe(qonaq.get("aut_ort"))
-
-    if ev_a is None or qon_a is None:
-        return {"null_data": True, "confidence_cap": 6.5}
-
-    mean = ev_a + qon_a
-    std  = mean * 0.28
-
-    result = {"null_data": False, "ortalama": round(mean, 2), "confidence_cap": 6.5}
-    for t in [mean - 3, mean - 1.5, mean, mean + 1.5, mean + 3]:
-        t = round(t + 0.5, 1)
-        key = f"over{str(t).replace('.', '_')}"
-        result[key] = normal_over(mean, std, t)
-
-    return result
-
-def hesabla_qapidan_zerbe(data: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    ev_q  = safe(ev.get("qapidan_zerbe_ort"))
-    qon_q = safe(qonaq.get("qapidan_zerbe_ort"))
-
-    if ev_q is None or qon_q is None:
-        return {"null_data": True, "confidence_cap": 6.5}
-
-    mean = ev_q + qon_q
-    std  = mean * 0.28
-
-    result = {"null_data": False, "ortalama": round(mean, 2), "confidence_cap": 6.5}
-    for t in [mean - 2, mean, mean + 2]:
-        t = round(t + 0.5, 1)
-        key = f"over{str(t).replace('.', '_')}"
-        result[key] = normal_over(mean, std, t)
-
-    return result
-
-def hesabla_penalti(data: dict) -> dict:
+def calculate_over_under(team1_stats: Dict, team2_stats: Dict, line: float = 2.5, market: str = "goals") -> Dict:
+    """
+    Over/Under bazarı (qol, corner, SOT, faul, kart və s.)
+    market: "goals", "corners", "sot", "fouls", "cards", "offsides", "throwins", "shots", "penalties"
+    Goals üçün attack/defense balansı, digər marketlər üçün sadə toplama + damping.
+    """
+    # Hər market üçün ortalama dəyərlər
+    if market == "goals":
+        home_attack = team1_stats.get('attack_strength', 1.0)
+        away_defense = team2_stats.get('defense_strength', 1.0)
+        league_home_avg = team1_stats.get('league_home_avg_goals', 1.5)
+        expected_home = home_attack * away_defense * league_home_avg
+        
+        away_attack = team2_stats.get('attack_strength', 1.0)
+        home_defense = team1_stats.get('defense_strength', 1.0)
+        league_away_avg = team2_stats.get('league_away_avg_goals', 1.2)
+        expected_away = away_attack * home_defense * league_away_avg
+        
+        expected_total = expected_home + expected_away
+        league_avg = team1_stats.get('league_avg_goals', 2.7)
+    elif market == "corners":
+        home_avg = team1_stats.get('avg_corners_for', 5.0)
+        away_avg = team2_stats.get('avg_corners_against', 4.5)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_corners', 9.5)
+    elif market == "sot":
+        home_avg = team1_stats.get('avg_sot_for', 4.5)
+        away_avg = team2_stats.get('avg_sot_against', 4.0)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_sot', 8.5)
+    elif market == "fouls":
+        home_avg = team1_stats.get('avg_fouls_committed', 11.0)
+        away_avg = team2_stats.get('avg_fouls_suffered', 10.5)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_fouls', 22.0)
+    elif market == "cards":
+        home_avg = team1_stats.get('avg_cards_per_match', 2.5)
+        away_avg = team2_stats.get('avg_cards_per_match', 2.7)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_cards', 5.2)
+    elif market == "offsides":
+        home_avg = team1_stats.get('avg_offsides', 2.0)
+        away_avg = team2_stats.get('avg_offsides', 2.1)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_offsides', 4.1)
+    elif market == "throwins":
+        home_avg = team1_stats.get('avg_throwins', 20.0)
+        away_avg = team2_stats.get('avg_throwins', 19.0)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_throwins', 39.0)
+    elif market == "shots":
+        home_avg = team1_stats.get('avg_shots', 12.0)
+        away_avg = team2_stats.get('avg_shots', 10.5)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_shots', 22.5)
+    elif market == "penalties":
+        home_avg = team1_stats.get('avg_penalties_for', 0.2)
+        away_avg = team2_stats.get('avg_penalties_against', 0.15)
+        expected_total = home_avg + away_avg
+        league_avg = team1_stats.get('league_avg_penalties', 0.35)
+    else:
+        return {"over": 0.5, "under": 0.5}
+    
+    # Damping (target_mean = league_avg)
+    confidence = min(team1_stats.get('data_confidence', 0.7), team2_stats.get('data_confidence', 0.7))
+    expected_total = dampen_poisson(expected_total, confidence, target_mean=league_avg)
+    
+    prob_over = poisson_over_probability(expected_total, line)
+    prob_under = poisson_under_probability(expected_total, line)
+    
     return {
-        "beli":      0.26,
-        "xeyr":      0.74,
-        "qeyd":      "Hakim çarpanı M4-dən tətbiq ediləcək",
-        "null_data": False
+        "over": round(prob_over, 4),
+        "under": round(prob_under, 4),
+        "expected_total": round(expected_total, 2)
     }
 
-def hesabla_guveni(data: dict, qol: dict, corner: dict, sot: dict) -> dict:
-    ev    = data.get("ev", {})
-    qonaq = data.get("qonaq", {})
-
-    saheler   = ["qol_vurdu", "qol_buraxdi", "over25", "bts",
-                 "corner_ort", "sot_ort", "faul_ort", "kart_ort"]
-    ev_dolu   = sum(1 for s in saheler if safe(ev.get(s)) is not None)
-    qon_dolu  = sum(1 for s in saheler if safe(qonaq.get(s)) is not None)
-    dolgunluk = round((ev_dolu + qon_dolu) / (len(saheler) * 2) * 4, 2)
-
-    poisson_bal = 3.0 if not qol.get("null_data") else 0.0
-
-    liqa_ort = safe(data.get("liqa_ortalama", {}).get("qol_ort"))
-    liqa_bal = 2.0 if liqa_ort is not None else 1.0
-
-    total = min(10.0, round(dolgunluk + poisson_bal + liqa_bal, 2))
-
+def calculate_btts(team1_stats: Dict, team2_stats: Dict) -> Dict:
+    """
+    Hər iki komanda qol atar (BTTS) ehtimalı.
+    Sadə independence assumption (real futbol üçün tam dəqiq deyil, amma əsas model).
+    """
+    home_attack = team1_stats.get('attack_strength', 1.0)
+    home_defense = team1_stats.get('defense_strength', 1.0)
+    away_attack = team2_stats.get('attack_strength', 1.0)
+    away_defense = team2_stats.get('defense_strength', 1.0)
+    
+    league_home_avg = team1_stats.get('league_home_avg_goals', 1.5)
+    league_away_avg = team2_stats.get('league_away_avg_goals', 1.2)
+    
+    lambda_home = home_attack * away_defense * league_home_avg
+    lambda_away = away_attack * home_defense * league_away_avg
+    
+    lambda_home = max(0.2, min(4.0, lambda_home))
+    lambda_away = max(0.2, min(4.0, lambda_away))
+    
+    # Ev komandasının qol atma ehtimalı (>=1 qol)
+    prob_home_scores = 1 - poisson_probability(lambda_home, 0)
+    # Qonaq komandasının qol atma ehtimalı
+    prob_away_scores = 1 - poisson_probability(lambda_away, 0)
+    
+    prob_btts = prob_home_scores * prob_away_scores
+    
     return {
-        "dolgunluk":   dolgunluk,
-        "poisson_bal": poisson_bal,
-        "liqa_bal":    liqa_bal,
-        "total":       total
+        "yes": round(prob_btts, 4),
+        "no": round(1 - prob_btts, 4)
     }
 
-def qol_ferqi_bonus(ev_goz: float, qon_goz: float) -> int:
-    ferg = abs(ev_goz - qon_goz)
-    if ferg < 0.4: return -20
-    if ferg < 0.8: return 0
-    if ferg < 1.2: return 15
-    if ferg < 1.6: return 25
-    if ferg < 2.0: return 35
-    return 45
+def calculate_exact_score(team1_stats: Dict, team2_stats: Dict, max_goals: int = 5) -> Dict:
+    """
+    Dəqiq hesab ehtimalları (0-0, 1-0, 0-1, ..., max_goals-max_goals)
+    Dinamik limit.
+    """
+    home_attack = team1_stats.get('attack_strength', 1.0)
+    home_defense = team1_stats.get('defense_strength', 1.0)
+    away_attack = team2_stats.get('attack_strength', 1.0)
+    away_defense = team2_stats.get('defense_strength', 1.0)
+    
+    league_home_avg = team1_stats.get('league_home_avg_goals', 1.5)
+    league_away_avg = team2_stats.get('league_away_avg_goals', 1.2)
+    
+    lambda_home = home_attack * away_defense * league_home_avg
+    lambda_away = away_attack * home_defense * league_away_avg
+    
+    lambda_home = max(0.2, min(4.0, lambda_home))
+    lambda_away = max(0.2, min(4.0, lambda_away))
+    
+    # Dinamik limit (ən azı 5, ən çoxu 12)
+    dynamic_max = max(max_goals, int(max(lambda_home, lambda_away) * 2) + 2)
+    dynamic_max = min(dynamic_max, 12)
+    
+    scores = {}
+    total_prob = 0.0
+    for i in range(dynamic_max + 1):
+        for j in range(dynamic_max + 1):
+            prob = poisson_probability(lambda_home, i) * poisson_probability(lambda_away, j)
+            scores[f"{i}-{j}"] = round(prob, 6)
+            total_prob += prob
+    
+    # Normalizasiya
+    if total_prob > 0:
+        for k in scores:
+            scores[k] = round(scores[k] / total_prob, 6)
+    
+    return scores
 
-def corner_ferqi_bonus(ev_c: Optional[float], qon_c: Optional[float]) -> int:
-    if ev_c is None or qon_c is None:
-        return 0
-    ferg = abs(ev_c * 1.15 - qon_c * 0.85)
-    if ferg < 1.0: return -20
-    if ferg < 1.5: return 0
-    if ferg < 2.0: return 15
-    if ferg < 2.5: return 25
-    if ferg < 3.0: return 35
-    return 45
-
-def run_m1(parser_json: dict) -> dict:
-    ev    = parser_json.get("ev", {})
-    qonaq = parser_json.get("qonaq", {})
-
-    qol      = hesabla_qol_bazasi(parser_json)
-    bazarlar = hesabla_qol_bazarlari(qol)
-    corner   = hesabla_corner(parser_json)
-    sot      = hesabla_sot(parser_json)
-    faul     = hesabla_faul(parser_json)
-    kart     = hesabla_kart(parser_json)
-    ofsayt   = hesabla_ofsayt(parser_json)
-    aut      = hesabla_aut(parser_json)
-    qapidan  = hesabla_qapidan_zerbe(parser_json)
-    penalti  = hesabla_penalti(parser_json)
-    guveni   = hesabla_guveni(parser_json, qol, corner, sot)
-
-    ev_oyun  = safe(ev.get("oyun_sayi")) or 16
-    qon_oyun = safe(qonaq.get("oyun_sayi")) or 16
-
-    ev_v  = safe(ev.get("qol_vurdu")) or 0
-    ev_b  = safe(ev.get("qol_buraxdi")) or 0
-    qon_v = safe(qonaq.get("qol_vurdu")) or 0
-    qon_b = safe(qonaq.get("qol_buraxdi")) or 0
-
-    if ev_v > 5:
-        ev_v = ev_v / ev_oyun
-        ev_b = ev_b / ev_oyun
-    if qon_v > 5:
-        qon_v = qon_v / qon_oyun
-        qon_b = qon_b / qon_oyun
-
-    ev_goz  = (ev_v + qon_b) / 2
-    qon_goz = (qon_v + ev_b) / 2
-    ev_c    = safe(ev.get("corner_ort"))
-    qon_c   = safe(qonaq.get("corner_ort"))
-
-    bonus_qol    = qol_ferqi_bonus(ev_goz, qon_goz)
-    bonus_corner = corner_ferqi_bonus(ev_c, qon_c)
-
-    null_fields = [
-        s for s in ["sot_ort", "faul_ort", "kart_ort",
-                    "ofsayt_ort", "aut_ort", "qapidan_zerbe_ort"]
-        if safe(ev.get(s)) is None
-    ]
-
+def calculate_first_half(team1_stats: Dict, team2_stats: Dict) -> Dict:
+    """
+    İlk yarı üçün 1X2, over/under, BTTS
+    """
+    first_half_factor = 0.45
+    
+    home_attack = team1_stats.get('attack_strength', 1.0)
+    home_defense = team1_stats.get('defense_strength', 1.0)
+    away_attack = team2_stats.get('attack_strength', 1.0)
+    away_defense = team2_stats.get('defense_strength', 1.0)
+    
+    league_home_avg = team1_stats.get('league_home_avg_goals', 1.5)
+    league_away_avg = team2_stats.get('league_away_avg_goals', 1.2)
+    
+    lambda_home_full = home_attack * away_defense * league_home_avg
+    lambda_away_full = away_attack * home_defense * league_away_avg
+    
+    lambda_home_fh = lambda_home_full * first_half_factor
+    lambda_away_fh = lambda_away_full * first_half_factor
+    
+    lambda_home_fh = max(0.1, min(2.0, lambda_home_fh))
+    lambda_away_fh = max(0.1, min(2.0, lambda_away_fh))
+    
+    max_goals_fh = max(5, int(max(lambda_home_fh, lambda_away_fh) * 3))
+    
+    prob_home = 0.0
+    prob_draw = 0.0
+    prob_away = 0.0
+    
+    for i in range(max_goals_fh + 1):
+        for j in range(max_goals_fh + 1):
+            p = poisson_probability(lambda_home_fh, i) * poisson_probability(lambda_away_fh, j)
+            if i > j:
+                prob_home += p
+            elif i == j:
+                prob_draw += p
+            else:
+                prob_away += p
+    
+    total = prob_home + prob_draw + prob_away
+    if total > 0:
+        prob_home /= total
+        prob_draw /= total
+        prob_away /= total
+    
+    expected_total_fh = lambda_home_fh + lambda_away_fh
+    over_05 = poisson_over_probability(expected_total_fh, 0.5)
+    over_15 = poisson_over_probability(expected_total_fh, 1.5)
+    under_05 = poisson_under_probability(expected_total_fh, 0.5)
+    under_15 = poisson_under_probability(expected_total_fh, 1.5)
+    
+    prob_home_scores = 1 - poisson_probability(lambda_home_fh, 0)
+    prob_away_scores = 1 - poisson_probability(lambda_away_fh, 0)
+    btts = prob_home_scores * prob_away_scores
+    
     return {
-        "qol_bazasi":    qol,
-        "qol_bazarlari": bazarlar,
-        "corner":        corner,
-        "sot":           sot,
-        "faul":          faul,
-        "kart":          kart,
-        "ofsayt":        ofsayt,
-        "aut":           aut,
-        "qapidan_zerbe": qapidan,
-        "penalti":       penalti,
-        "guveni":        guveni,
-        "bonuslar": {
-            "qol_ferqi":    bonus_qol,
-            "corner_ferqi": bonus_corner
+        "1x2": {
+            "home_win": round(prob_home, 4),
+            "draw": round(prob_draw, 4),
+            "away_win": round(prob_away, 4)
         },
-        "null_fields": null_fields
-    }
-
-if __name__ == "__main__":
-    test_data = {
-        "ev": {
-            "ad": "Las Palmas",
-            "qol_vurdu": 24,
-            "qol_buraxdi": 11,
-            "oyun_sayi": 16,
-            "over25": 41,
-            "bts": 53,
-            "corner_ort": 4.75,
-            "sot_ort": None,
-            "faul_ort": None,
-            "kart_ort": None,
-            "ofsayt_ort": None,
-            "aut_ort": None,
-            "qapidan_zerbe_ort": None
+        "over_under": {
+            "over_0_5": round(over_05, 4),
+            "under_0_5": round(under_05, 4),
+            "over_1_5": round(over_15, 4),
+            "under_1_5": round(under_15, 4)
         },
-        "qonaq": {
-            "ad": "Granada",
-            "qol_vurdu": 17,
-            "qol_buraxdi": 18,
-            "oyun_sayi": 16,
-            "over25": 41,
-            "bts": 53,
-            "corner_ort": 6.0,
-            "sot_ort": None,
-            "faul_ort": None,
-            "kart_ort": None,
-            "ofsayt_ort": None,
-            "aut_ort": None,
-            "qapidan_zerbe_ort": None
-        },
-        "liqa_ortalama": {
-            "qol_ort": 2.59
-        },
-        "h2h": {
-            "ort_qol": 1.67
+        "btts": {
+            "yes": round(btts, 4),
+            "no": round(1 - btts, 4)
         }
     }
 
-    result = run_m1(test_data)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+def calculate_combination(team1_stats: Dict, team2_stats: Dict, markets: List[str]) -> Dict:
+    """
+    Kombinə bazar: məsələn "Over 2.5 & BTTS", "Home win & Over 2.5"
+    İndependence problemini azaltmaq üçün korrelyasiya əmsalı əlavə edildi.
+    """
+    results = {}
+    
+    if "over2.5_btts" in markets:
+        ou = calculate_over_under(team1_stats, team2_stats, 2.5, "goals")
+        btts_res = calculate_btts(team1_stats, team2_stats)
+        prob_independent = ou["over"] * btts_res["yes"]
+        # Korrelyasiya əmsalı (0.2): over 2.5 və BTTS arasında müsbət əlaqə
+        correlation_boost = 0.2
+        prob_adjusted = prob_independent * (1 + correlation_boost * (1 - prob_independent))
+        prob_adjusted = min(prob_adjusted, 0.95)
+        results["over2.5_and_btts"] = round(prob_adjusted, 4)
+    
+    if "home_win_over2.5" in markets:
+        res_1x2 = calculate_1x2(team1_stats, team2_stats)
+        ou = calculate_over_under(team1_stats, team2_stats, 2.5, "goals")
+        prob = res_1x2["home_win"] * ou["over"]
+        results["home_win_and_over2.5"] = round(prob, 4)
+    
+    if "draw_under2.5" in markets:
+        res_1x2 = calculate_1x2(team1_stats, team2_stats)
+        ou = calculate_over_under(team1_stats, team2_stats, 2.5, "goals")
+        prob = res_1x2["draw"] * ou["under"]
+        results["draw_and_under2.5"] = round(prob, 4)
+    
+    return results
+
+def calculate_corner_handicap(team1_stats: Dict, team2_stats: Dict, handicap: float = -1.5) -> Dict:
+    """Korner handikapı (ev komandası üçün)"""
+    home_corners = team1_stats.get('avg_corners_for', 5.0)
+    away_corners = team2_stats.get('avg_corners_for', 4.5)
+    expected_diff = home_corners - away_corners
+    
+    if expected_diff > handicap:
+        prob_home_cover = 0.6 + (expected_diff - handicap) / 10
+    else:
+        prob_home_cover = 0.4 + (expected_diff - handicap) / 10
+    
+    prob_home_cover = max(0.1, min(0.9, prob_home_cover))
+    
+    return {
+        "home_cover": round(prob_home_cover, 4),
+        "away_cover": round(1 - prob_home_cover, 4)
+    }
+
+def calculate_cascading_bonus(m1_results: Dict) -> Dict:
+    """
+    Kaskad güvən bonusları: əgər bir neçə bazar yüksək ehtimal göstərirsə, bonus əlavə et
+    """
+    confidence_boost = 0.0
+    high_prob_markets = []
+    
+    for market, data in m1_results.items():
+        if isinstance(data, dict):
+            if market == "1x2":
+                for outcome, prob in data.items():
+                    if prob > 0.55:
+                        high_prob_markets.append(f"{market}_{outcome}")
+                        confidence_boost += 0.02
+            elif market == "btts" and data.get("yes", 0) > 0.6:
+                high_prob_markets.append("btts_yes")
+                confidence_boost += 0.03
+            elif market == "over_under" and isinstance(data, dict) and "2.5" in data:
+                if data["2.5"].get("over", 0) > 0.6:
+                    high_prob_markets.append("over_2.5")
+                    confidence_boost += 0.02
+    
+    confidence_boost = min(0.15, confidence_boost)
+    
+    return {
+        "boost": round(confidence_boost, 4),
+        "trigger_markets": high_prob_markets
+    }
+
+# ========== ƏSAS run_m1 FUNKSİYASI ==========
+
+def run_m1(parser_json: Dict) -> Dict:
+    """
+    Parser JSON-dan gələn statistikaları işləyir və bütün bazarlar üçün ehtimalları qaytarır.
+    """
+    team1 = parser_json.get("team1", "Unknown")
+    team2 = parser_json.get("team2", "Unknown")
+    team1_stats = parser_json.get("team1_stats", {})
+    team2_stats = parser_json.get("team2_stats", {})
+    h2h_stats = parser_json.get("h2h_stats", {})
+    
+    # H2H çəkisini hesabla (təkmilləşdirilmiş)
+    h2h_weight = calculate_h2h_weight(h2h_stats)
+    
+    # Bütün bazarlar üçün hesablamalar
+    results = {
+        "team1": team1,
+        "team2": team2,
+        "h2h_weight": h2h_weight,
+        "m1_confidence": 0.0
+    }
+    
+    # 1X2
+    results["1x2"] = calculate_1x2(team1_stats, team2_stats, h2h_weight)
+    
+    # Over/Under qollar (1.5, 2.5, 3.5, 4.5)
+    results["over_under"] = {}
+    for line in [1.5, 2.5, 3.5, 4.5]:
+        ou = calculate_over_under(team1_stats, team2_stats, line, "goals")
+        results["over_under"][str(line)] = ou
+    
+    # BTTS
+    results["btts"] = calculate_btts(team1_stats, team2_stats)
+    
+    # Dəqiq hesab (top 5 ehtimal)
+    exact_scores = calculate_exact_score(team1_stats, team2_stats, max_goals=4)
+    sorted_scores = sorted(exact_scores.items(), key=lambda x: x[1], reverse=True)[:5]
+    results["exact_scores"] = dict(sorted_scores)
+    
+    # Kornerlər
+    results["corners"] = {
+        "total": calculate_over_under(team1_stats, team2_stats, 9.5, "corners"),
+        "handicap": calculate_corner_handicap(team1_stats, team2_stats, -1.5)
+    }
+    
+    # SOT
+    results["sot"] = calculate_over_under(team1_stats, team2_stats, 8.5, "sot")
+    
+    # Faullar
+    results["fouls"] = calculate_over_under(team1_stats, team2_stats, 21.5, "fouls")
+    
+    # Kartlar
+    results["cards"] = calculate_over_under(team1_stats, team2_stats, 4.5, "cards")
+    
+    # Ofsaytlar
+    results["offsides"] = calculate_over_under(team1_stats, team2_stats, 3.5, "offsides")
+    
+    # Autlar
+    results["throwins"] = calculate_over_under(team1_stats, team2_stats, 38.5, "throwins")
+    
+    # Qapıdan zərbə
+    results["shots"] = calculate_over_under(team1_stats, team2_stats, 22.5, "shots")
+    
+    # Penalti
+    results["penalties"] = calculate_over_under(team1_stats, team2_stats, 0.5, "penalties")
+    
+    # İlk yarı
+    results["first_half"] = calculate_first_half(team1_stats, team2_stats)
+    
+    # Kombinə bazarlar (təkmilləşdirilmiş korrelyasiya ilə)
+    results["combinations"] = calculate_combination(team1_stats, team2_stats, 
+                                                    ["over2.5_btts", "home_win_over2.5", "draw_under2.5"])
+    
+    # Kaskad bonus
+    results["cascade_bonus"] = calculate_cascading_bonus(results)
+    
+    # M1 ümumi güvən (ortalama data_confidence + h2h_weight təsiri)
+    data_conf = (team1_stats.get('data_confidence', 0.7) + team2_stats.get('data_confidence', 0.7)) / 2
+    results["m1_confidence"] = round(min(0.95, data_conf * (0.8 + h2h_weight * 0.2)), 4)
+    
+    return results
+
+# ========== TEST BLOKU ==========
+if __name__ == "__main__":
+    test_parser_json = {
+        "team1": "Liverpool",
+        "team2": "Manchester City",
+        "team1_stats": {
+            "attack_strength": 1.35,
+            "defense_strength": 0.85,
+            "avg_goals_scored": 2.4,
+            "avg_goals_conceded": 0.9,
+            "avg_corners_for": 7.2,
+            "avg_corners_against": 3.8,
+            "avg_sot_for": 6.1,
+            "avg_sot_against": 3.2,
+            "avg_fouls_committed": 9.5,
+            "avg_fouls_suffered": 12.0,
+            "avg_cards_per_match": 1.8,
+            "avg_offsides": 1.5,
+            "avg_throwins": 23.0,
+            "avg_shots": 16.0,
+            "avg_penalties_for": 0.3,
+            "league_home_avg_goals": 1.55,
+            "league_away_avg_goals": 1.25,
+            "league_avg_goals": 2.8,
+            "league_avg_corners": 9.8,
+            "league_avg_sot": 8.7,
+            "league_avg_fouls": 21.5,
+            "league_avg_cards": 5.0,
+            "league_avg_offsides": 4.0,
+            "league_avg_throwins": 40.0,
+            "league_avg_shots": 23.0,
+            "league_avg_penalties": 0.4,
+            "data_confidence": 0.9
+        },
+        "team2_stats": {
+            "attack_strength": 1.45,
+            "defense_strength": 0.75,
+            "avg_goals_scored": 2.6,
+            "avg_goals_conceded": 0.8,
+            "avg_corners_for": 6.8,
+            "avg_corners_against": 4.2,
+            "avg_sot_for": 5.9,
+            "avg_sot_against": 3.5,
+            "avg_fouls_committed": 10.2,
+            "avg_fouls_suffered": 11.5,
+            "avg_cards_per_match": 2.0,
+            "avg_offsides": 1.7,
+            "avg_throwins": 22.0,
+            "avg_shots": 15.5,
+            "avg_penalties_for": 0.35,
+            "league_home_avg_goals": 1.55,
+            "league_away_avg_goals": 1.25,
+            "league_avg_goals": 2.8,
+            "league_avg_corners": 9.8,
+            "league_avg_sot": 8.7,
+            "league_avg_fouls": 21.5,
+            "league_avg_cards": 5.0,
+            "league_avg_offsides": 4.0,
+            "league_avg_throwins": 40.0,
+            "league_avg_shots": 23.0,
+            "league_avg_penalties": 0.4,
+            "data_confidence": 0.9
+        },
+        "h2h_stats": {
+            "matches": [
+                {"home_goals": 2, "away_goals": 2},
+                {"home_goals": 1, "away_goals": 0},
+                {"home_goals": 3, "away_goals": 1},
+                {"home_goals": 1, "away_goals": 1},
+                {"home_goals": 0, "away_goals": 2}
+            ]
+        }
+    }
+    
+    result = run_m1(test_parser_json)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

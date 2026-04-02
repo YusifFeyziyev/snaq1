@@ -1,276 +1,383 @@
 import os
 import json
-import re
+import time
 import requests
-from groq import Groq
+from typing import Dict, Any, List, Optional
 
-# ─────────────────────────────────────────
-#  CONFIG IMPORT
-# ─────────────────────────────────────────
+# Config-dən açarları və model adını götür
 try:
-    from config import MODEL_M2, GROQ_KEY_M2, TAVILY_KEY, SERPER_KEY
+    from config import GROQ_KEY_M2, MODEL_M2, TAVILY_KEY, SERPER_KEY
 except ImportError:
-    MODEL_M2   = os.environ.get("MODEL_M2",    "llama-3.3-70b-versatile")
-    GROQ_KEY_M2 = os.environ.get("GROQ_KEY_M2", "")
-    TAVILY_KEY  = os.environ.get("TAVILY_KEY",  "")
-    SERPER_KEY  = os.environ.get("SERPER_KEY",  "")
+    GROQ_KEY_M2 = os.getenv("GROQ_KEY_M2")
+    MODEL_M2 = os.getenv("MODEL_M2", "llama-3.3-70b-versatile")
+    TAVILY_KEY = os.getenv("TAVILY_KEY")
+    SERPER_KEY = os.getenv("SERPER_KEY")
 
-client = Groq(api_key=GROQ_KEY_M2)
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+TAVILY_API_URL = "https://api.tavily.com/search"
+SERPER_API_URL = "https://google.serper.dev/search"
 
-# ─────────────────────────────────────────
-#  M2 SYSTEM PROMPTU
-# ─────────────────────────────────────────
-M2_PROMPT = """Sən futbol analiz sistemi üçün araşdırma agentisən.
-Sənə axtarış nəticələri veriləcək. Bu nəticələrə əsasən aşağıdakı JSON strukturunu doldur.
-
-QAYDALAR:
-- status: "real" → internetdən tapılıb, "təxmin" → məntiqə görə çıxarılıb, "tapılmadı" → məlumat yoxdur
-- confidence: 0.0–1.0 arası
-- Heç vaxt uydurma. Olmayan məlumatı "tapılmadı" et.
-- YALNIZ JSON qaytar, başqa heç nə yazma.
-
-ÇIXIŞ FORMATI (yalnız bu JSON):
-{
-  "hakim": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "hakim_sertlik": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "hakim_kart_ort": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "hakim_penalti_tezliyi": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "hakim_var_tezliyi": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "ev_mesqci": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "ev_taktika": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "ev_oyun_oncesi": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "qonaq_mesqci": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "qonaq_taktika": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "qonaq_oyun_oncesi": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "travma_ev": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "travma_qonaq": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "lineup_ev": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "lineup_qonaq": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "rotasiya_ev": {"value": false, "status": "tapılmadı", "confidence": 0.0},
-  "rotasiya_qonaq": {"value": false, "status": "tapılmadı", "confidence": 0.0},
-  "stadion": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "hava": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "motivasiya_ev": {"value": null, "status": "tapılmadı", "confidence": 0.0},
-  "motivasiya_qonaq": {"value": null, "status": "tapılmadı", "confidence": 0.0}
-}"""
-
-# ─────────────────────────────────────────
-#  AXTARIŞ SORĞULARI
-# ─────────────────────────────────────────
-def axtaris_sorğulari(parser_json: dict) -> dict:
-    ev  = parser_json.get("ev",    {}).get("ad", "")
-    qon = parser_json.get("qonaq", {}).get("ad", "")
-    liqa = parser_json.get("oyun_info", {}).get("liqa", "")
-
+# ========== API KEY YOXLANMASI (CRITICAL) ==========
+def validate_api_keys() -> Dict[str, bool]:
+    """API açarlarının vəziyyətini yoxlayır."""
     return {
-        "hakim":         f"{ev} vs {qon} referee {liqa}",
-        "travma_ev":     f"{ev} injury news team news",
-        "travma_qonaq":  f"{qon} injury news team news",
-        "lineup_ev":     f"{ev} predicted lineup starting XI",
-        "lineup_qonaq":  f"{qon} predicted lineup starting XI",
-        "mesqci_ev":     f"{ev} manager tactics press conference",
-        "mesqci_qonaq":  f"{qon} manager tactics press conference",
+        "groq": bool(GROQ_KEY_M2),
+        "tavily": bool(TAVILY_KEY),
+        "serper": bool(SERPER_KEY)
     }
 
-# ─────────────────────────────────────────
-#  TAVILY AXTARIŞI
-# ─────────────────────────────────────────
-def tavily_axtar(sorğu: str) -> str | None:
+# ========== AXTARIŞ FUNKSİYALARI (RETRY İLƏ) ==========
+def search_with_tavily(query: str, retries: int = 2) -> Optional[Dict]:
+    """Tavily API ilə axtarış edir. Retry mexanizmi var."""
     if not TAVILY_KEY:
         return None
-    try:
-        resp = requests.post(
-            "https://api.tavily.com/search",
-            json={
-                "api_key": TAVILY_KEY,
-                "query":   sorğu,
-                "max_results": 3,
-                "search_depth": "basic"
-            },
-            timeout=15
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])
-            if results:
-                return "\n".join(
-                    f"- {r.get('title','')}: {r.get('content','')[:300]}"
-                    for r in results
-                )
-        elif resp.status_code == 429:
-            return "LIMIT"
-    except Exception:
-        pass
+    for attempt in range(retries):
+        try:
+            headers = {
+                "Authorization": f"Bearer {TAVILY_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "query": query,
+                "search_depth": "advanced",
+                "max_results": 5
+            }
+            response = requests.post(TAVILY_API_URL, headers=headers, json=payload, timeout=25)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                if attempt == retries - 1:
+                    print(f"Tavily xətası (status {response.status_code}): {query}")
+                time.sleep(1)
+        except requests.exceptions.Timeout:
+            print(f"Tavily timeout (cəhd {attempt+1}): {query}")
+            time.sleep(1)
+        except Exception as e:
+            print(f"Tavily exception: {e}")
+            time.sleep(1)
     return None
 
-# ─────────────────────────────────────────
-#  SERPER AXTARIŞI (fallback)
-# ─────────────────────────────────────────
-def serper_axtar(sorğu: str) -> str | None:
+def search_with_serper(query: str, retries: int = 2) -> Optional[Dict]:
+    """Serper API ilə axtarış edir. Retry mexanizmi var."""
     if not SERPER_KEY:
         return None
-    try:
-        resp = requests.post(
-            "https://google.serper.dev/search",
-            headers={"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"},
-            json={"q": sorğu, "num": 3},
-            timeout=15
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            items = data.get("organic", [])
-            if items:
-                return "\n".join(
-                    f"- {i.get('title','')}: {i.get('snippet','')}"
-                    for i in items
-                )
-        elif resp.status_code == 429:
-            return "LIMIT"
-    except Exception:
-        pass
+    for attempt in range(retries):
+        try:
+            headers = {
+                "X-API-KEY": SERPER_KEY,
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "q": query,
+                "num": 5
+            }
+            response = requests.post(SERPER_API_URL, headers=headers, json=payload, timeout=25)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                if attempt == retries - 1:
+                    print(f"Serper xətası (status {response.status_code}): {query}")
+                time.sleep(1)
+        except requests.exceptions.Timeout:
+            print(f"Serper timeout (cəhd {attempt+1}): {query}")
+            time.sleep(1)
+        except Exception as e:
+            print(f"Serper exception: {e}")
+            time.sleep(1)
     return None
 
-# ─────────────────────────────────────────
-#  ƏSAS AXTAR FUNKSİYASI (Tavily → Serper → tapılmadı)
-# ─────────────────────────────────────────
-def axtar(sorğu: str) -> tuple[str | None, str]:
-    """
-    Qaytarır: (mətn | None, mənbə)
-    mənbə: "tavily" | "serper" | "tapılmadı"
-    """
-    # 1. Tavily cəhdi
-    nəticə = tavily_axtar(sorğu)
-    if nəticə and nəticə != "LIMIT":
-        return nəticə, "tavily"
-
-    # 2. Serper cəhdi (Tavily limit və ya uğursuz)
-    nəticə = serper_axtar(sorğu)
-    if nəticə and nəticə != "LIMIT":
-        return nəticə, "serper"
-
-    return None, "tapılmadı"
-
-# ─────────────────────────────────────────
-#  GROQ ANALİZ
-# ─────────────────────────────────────────
-def groq_analiz(axtaris_metn: str, ev_ad: str, qon_ad: str) -> dict | None:
-    try:
-        response = client.chat.completions.create(
-            model=MODEL_M2,
-            messages=[
-                {"role": "system", "content": M2_PROMPT},
-                {"role": "user", "content": (
-                    f"Ev komandası: {ev_ad}\n"
-                    f"Qonaq komandası: {qon_ad}\n\n"
-                    f"AXTARIŞ NƏTİCƏLƏRİ:\n{axtaris_metn}"
-                )}
-            ],
-            temperature=0.1,
-            max_tokens=3000,
-            timeout=120
-        )
-        content = response.choices[0].message.content.strip()
-
-        # JSON-u təmizlə (code block varsa sil)
-        content = re.sub(r"```(?:json)?", "", content).strip().rstrip("`")
-
-        json_match = re.search(r'\{.*\}', content, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group())
-
-    except Exception as e:
-        print(f"[M2] Groq xətası: {e}")
-
+def search_web(query: str) -> Optional[Dict]:
+    """Əvvəl Tavily, sonra Serper ilə axtarış edir."""
+    result = search_with_tavily(query)
+    if result:
+        return result
+    result = search_with_serper(query)
+    if result:
+        return result
     return None
 
-# ─────────────────────────────────────────
-#  GÜVƏN HESABI /10
-# ─────────────────────────────────────────
-def hesabla_m2_guveni(m2_data: dict) -> float:
-    if not m2_data:
-        return 0.0
+def extract_search_text(search_result: Optional[Dict]) -> str:
+    """Axtarış nəticəsindən mətni çıxarır."""
+    if not search_result:
+        return "Heç bir nəticə tapılmadı."
+    
+    text_parts = []
+    
+    # Tavily formatı
+    if "results" in search_result:
+        for item in search_result["results"][:5]:
+            title = item.get("title", "")
+            snippet = item.get("content", item.get("snippet", ""))
+            if title:
+                text_parts.append(f"Başlıq: {title}")
+            if snippet:
+                text_parts.append(f"Məzmun: {snippet}")
+            text_parts.append("---")
+    
+    # Serper formatı
+    elif "organic" in search_result:
+        for item in search_result["organic"][:5]:
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            if title:
+                text_parts.append(f"Başlıq: {title}")
+            if snippet:
+                text_parts.append(f"Məzmun: {snippet}")
+            text_parts.append("---")
+    
+    if not text_parts:
+        return "Heç bir nəticə tapılmadı."
+    
+    return "\n".join(text_parts)
 
-    vacib_saheler = [
-        "hakim", "hakim_sertlik",
-        "ev_mesqci", "qonaq_mesqci",
-        "travma_ev", "travma_qonaq",
-        "lineup_ev", "lineup_qonaq",
-        "rotasiya_ev", "rotasiya_qonaq"
-    ]
-
-    # 0–4 bal: tapılan "real" məlumat sayı
-    tapilan = sum(
-        1 for k in vacib_saheler
-        if m2_data.get(k, {}).get("status") == "real"
-    )
-    say_bal = min(4.0, tapilan * 0.8)
-
-    # 0–3 bal: ortalama confidence
-    conf_list = [
-        m2_data.get(k, {}).get("confidence", 0.0)
-        for k in vacib_saheler
-    ]
-    ort_conf = sum(conf_list) / len(conf_list) if conf_list else 0.0
-    menbe_bal = ort_conf * 3.0
-
-    # 0–3 bal: vacib məlumatların dolğunluğu
-    vacib_bal = 0.0
-    if m2_data.get("hakim", {}).get("confidence", 0) >= 0.7:
-        vacib_bal += 1.5
-    if m2_data.get("ev_mesqci", {}).get("confidence", 0) >= 0.7:
-        vacib_bal += 0.75
-    if m2_data.get("qonaq_mesqci", {}).get("confidence", 0) >= 0.7:
-        vacib_bal += 0.75
-
-    total = round(min(10.0, say_bal + menbe_bal + vacib_bal), 2)
-    return total
-
-# ─────────────────────────────────────────
-#  ANA FUNKSIYA
-# ─────────────────────────────────────────
-def run_m2(parser_json: dict) -> dict:
-    ev_ad  = parser_json.get("ev",    {}).get("ad", "Ev komandası")
-    qon_ad = parser_json.get("qonaq", {}).get("ad", "Qonaq komandası")
-
-    sorğular = axtaris_sorğulari(parser_json)
-
-    toplam_metn       = ""
-    axtaris_statuslari = {}
-
-    for key, sorğu in sorğular.items():
-        metn, menbe = axtar(sorğu)
-        axtaris_statuslari[key] = menbe
-        if metn:
-            toplam_metn += f"\n=== {key.upper()} ===\n{metn}\n"
-
-    # Heç nə tapılmadısa
-    if not toplam_metn.strip():
-        return {
-            "success": False,
-            "data": None,
-            "guveni": 0.0,
-            "axtaris_statuslari": axtaris_statuslari,
-            "qeyd": "Heç bir axtarış nəticəsi tapılmadı"
+# ========== GROQ JSON PARSE (MÖHKƏM) ==========
+def safe_json_parse(text: str) -> Dict:
+    """
+    Groq-dan gələn mətni JSON-a çevirir.
+    Bir çox səhv formatları idarə edir.
+    """
+    import re
+    
+    # 1. Markdown bloklarını təmizlə
+    json_pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
+    match = re.search(json_pattern, text, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+    else:
+        # 2. Ən böyük {} strukturunu tap
+        brace_pattern = r"(\{.*\})"
+        match = re.search(brace_pattern, text, re.DOTALL)
+        if match:
+            json_str = match.group(1)
+        else:
+            json_str = text.strip()
+    
+    # 3. Trailing vergülləri təmizlə (JSON-da icazə verilmir)
+    json_str = re.sub(r',\s*}', '}', json_str)
+    json_str = re.sub(r',\s*]', ']', json_str)
+    
+    # 4. Null dəyərləri düzəlt
+    json_str = json_str.replace("null", "null")
+    
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        # 5. Fallback: regex ilə ən vacib sahələri çıxar
+        print(f"JSON parse xətası: {e}. Fallback edilir...")
+        fallback = {
+            "referee": {"status": "tapılmadı", "confidence": 0.0},
+            "coach": {"status": "tapılmadı", "confidence": 0.0},
+            "injuries": {"status": "tapılmadı", "confidence": 0.0},
+            "lineup": {"status": "tapılmadı", "confidence": 0.0},
+            "stadium": {"status": "tapılmadı", "confidence": 0.0},
+            "weather": {"status": "tapılmadı", "confidence": 0.0},
+            "motivation": {"status": "tapılmadı", "confidence": 0.0},
+            "fatigue": {"status": "tapılmadı", "confidence": 0.0}
         }
+        # Regex ilə bəzi məlumatları çıxarmağa cəhd
+        referee_match = re.search(r'"referee"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"', text)
+        if referee_match:
+            fallback["referee"]["name"] = referee_match.group(1)
+            fallback["referee"]["status"] = "təxmin"
+            fallback["referee"]["confidence"] = 0.5
+        return fallback
 
-    # Groq analiz
-    m2_data = groq_analiz(toplam_metn, ev_ad, qon_ad)
+# ========== GROQ ANALİZİ (TIMEOUT İDARƏSİ) ==========
+def analyze_with_groq(team1: str, team2: str, search_text: str) -> Dict:
+    """
+    Groq Llama istifadə edərək axtarış nəticələrini təhlil edir və JSON formatında qaytarır.
+    """
+    if not GROQ_KEY_M2:
+        raise ValueError("GROQ_KEY_M2 environment-da tapılmadı. Zəhmət olmasa .env faylını yoxlayın.")
+    
+    system_prompt = """Sən futbol analitikisən. Verilən axtarış nəticələrinə əsasən aşağıdakı JSON strukturunu doldur. Hər məlumat üçün status (real, təxmin, tapılmadı) və confidence (0-1 arası) qaytar. Heç bir əlavə izah yazma, yalnız JSON.
 
-    if not m2_data:
-        return {
-            "success": False,
-            "data": None,
-            "guveni": 0.0,
-            "axtaris_statuslari": axtaris_statuslari,
-            "qeyd": "Groq analiz uğursuz oldu"
-        }
-
-    guveni = hesabla_m2_guveni(m2_data)
-    m2_data["m2_confidence_total"] = guveni
-
-    return {
-        "success": True,
-        "data": m2_data,
-        "guveni": guveni,
-        "axtaris_statuslari": axtaris_statuslari
+{
+    "referee": {
+        "name": "Hakimin adı",
+        "yellow_avg": float or null,
+        "red_avg": float or null,
+        "foul_sensitivity": "yüksək/orta/aşağı",
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
+    },
+    "coach": {
+        "home_coach": "Ev komandasının məşqçisi",
+        "away_coach": "Qonaq komandasının məşqçisi",
+        "home_tactical_trend": "son oyunlardakı taktika",
+        "away_tactical_trend": "son oyunlardakı taktika",
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
+    },
+    "injuries": {
+        "home_absent": ["oyunçu1", "oyunçu2"],
+        "away_absent": ["oyunçu1", "oyunçu2"],
+        "home_doubtful": ["oyunçu1"],
+        "away_doubtful": ["oyunçu1"],
+        "key_players_missing": ["əsas oyunçu"],
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
+    },
+    "lineup": {
+        "home_expected": "4-3-3 kimi format",
+        "away_expected": "4-4-2",
+        "home_rotation": "aşağı/orta/yüksək",
+        "away_rotation": "aşağı/orta/yüksək",
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
+    },
+    "stadium": {
+        "name": "Stadion adı",
+        "capacity": int or null,
+        "home_advantage": "güclü/orta/zəif",
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
+    },
+    "weather": {
+        "temperature": int or null,
+        "condition": "yağışlı/buludlu/günəşli",
+        "wind": "yüngül/orta/güclü",
+        "impact": "aşağı/orta/yüksək",
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
+    },
+    "motivation": {
+        "home_motivation": "yüksək/orta/aşağı",
+        "away_motivation": "yüksək/orta/aşağı",
+        "reason": "səbəb",
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
+    },
+    "fatigue": {
+        "home_fatigue": "aşağı/orta/yüksək",
+        "away_fatigue": "aşağı/orta/yüksək",
+        "days_since_last_match_home": int or null,
+        "days_since_last_match_away": int or null,
+        "status": "real/təxmin/tapılmadı",
+        "confidence": float
     }
+}
+
+Mümkün qədər dəqiq ol. Əgər məlumat yoxdursa, "tapılmadı" statusu və confidence=0.0 qoy."""
+    
+    user_prompt = f"""Komandalar: {team1} vs {team2}
+
+Axtarış nəticələri:
+{search_text[:6000]}
+
+Yuxarıdakı JSON strukturuna uyğun olaraq məlumatları doldur."""
+    
+    headers = {
+        "Authorization": f"Bearer {GROQ_KEY_M2}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": MODEL_M2,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 3000
+    }
+    
+    try:
+        response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        assistant_message = data["choices"][0]["message"]["content"]
+        return safe_json_parse(assistant_message)
+    except requests.exceptions.Timeout:
+        raise Exception("Groq API timeout (60 saniyə).")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Groq API xətası: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Gözlənilməz xəta: {str(e)}")
+
+# ========== ƏSAS run_m2 FUNKSİYASI ==========
+def run_m2(parser_json: Dict) -> Dict:
+    """
+    M2 modulu: Parser JSON-dan komanda adlarını götürür, Tavily/Serper ilə axtarış edir,
+    Groq ilə təhlil edir və nəticəni qaytarır.
+    """
+    team1 = parser_json.get("team1", "Unknown")
+    team2 = parser_json.get("team2", "Unknown")
+    
+    # API key-lərin vəziyyətini yoxla
+    keys = validate_api_keys()
+    if not keys["groq"]:
+        raise ValueError("GROQ_KEY_M2 tapılmadı. M2 işləyə bilməz.")
+    if not keys["tavily"] and not keys["serper"]:
+        raise ValueError("Nə TAVILY_KEY, nə SERPER_KEY tapılmadı. Axtarış mümkün deyil.")
+    
+    print(f"M2 başladı: {team1} vs {team2}")
+    print(f"API vəziyyəti: Groq={keys['groq']}, Tavily={keys['tavily']}, Serper={keys['serper']}")
+    
+    # Axtarış üçün sorgular
+    queries = [
+        f"{team1} vs {team2} referee stats yellow cards fouls",
+        f"{team1} vs {team2} coach tactics lineup",
+        f"{team1} injuries lineup expected {team2} injuries",
+        f"{team1} {team2} stadium weather match preview"
+    ]
+    
+    all_search_text = ""
+    successful_searches = 0
+    for q in queries:
+        print(f"Axtarış: {q}")
+        search_result = search_web(q)
+        text = extract_search_text(search_result)
+        if text != "Heç bir nəticə tapılmadı.":
+            successful_searches += 1
+        all_search_text += f"\n--- SORĞU: {q} ---\n{text}\n"
+    
+    if successful_searches == 0:
+        print("XƏBƏRDARLIQ: Heç bir axtarış nəticə verilmədi. M2 boş JSON qaytaracaq.")
+        return {
+            "referee": {"status": "tapılmadı", "confidence": 0.0},
+            "coach": {"status": "tapılmadı", "confidence": 0.0},
+            "injuries": {"status": "tapılmadı", "confidence": 0.0},
+            "lineup": {"status": "tapılmadı", "confidence": 0.0},
+            "stadium": {"status": "tapılmadı", "confidence": 0.0},
+            "weather": {"status": "tapılmadı", "confidence": 0.0},
+            "motivation": {"status": "tapılmadı", "confidence": 0.0},
+            "fatigue": {"status": "tapılmadı", "confidence": 0.0},
+            "m2_warning": "Heç bir axtarış nəticəsi tapılmadı. API açarlarını yoxlayın."
+        }
+    
+    try:
+        result = analyze_with_groq(team1, team2, all_search_text)
+        # Məlumatların statusuna görə xəbərdarlıq əlavə et
+        low_conf_count = 0
+        for key, value in result.items():
+            if isinstance(value, dict) and value.get("status") == "tapılmadı":
+                low_conf_count += 1
+        if low_conf_count > 4:
+            result["m2_warning"] = f"{low_conf_count} kateqoriyada məlumat tapılmadı. Nəticələr məhduddur."
+        return result
+    except Exception as e:
+        print(f"M2 Groq xətası: {e}")
+        return {
+            "referee": {"status": "tapılmadı", "confidence": 0.0},
+            "coach": {"status": "tapılmadı", "confidence": 0.0},
+            "injuries": {"status": "tapılmadı", "confidence": 0.0},
+            "lineup": {"status": "tapılmadı", "confidence": 0.0},
+            "stadium": {"status": "tapılmadı", "confidence": 0.0},
+            "weather": {"status": "tapılmadı", "confidence": 0.0},
+            "motivation": {"status": "tapılmadı", "confidence": 0.0},
+            "fatigue": {"status": "tapılmadı", "confidence": 0.0},
+            "m2_error": str(e)
+        }
+
+# ========== TEST BLOKU ==========
+if __name__ == "__main__":
+    test_parser_json = {
+        "team1": "Liverpool",
+        "team2": "Manchester City"
+    }
+    try:
+        result = run_m2(test_parser_json)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    except Exception as e:
+        print("Test xətası:", e)
