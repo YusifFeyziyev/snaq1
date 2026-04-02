@@ -202,6 +202,7 @@ function fillFinal(m4) {
 // ─────────────────────────────────────────
 async function startAnalysis() {
     const text = document.getElementById("statsInput").value.trim();
+    const limitedText = text.slice(0, 4000); // Maksimum 4000 simvol (backend limitinə uyğun)
     const errorBox = document.getElementById("errorBox");
     const resultPanel = document.getElementById("resultPanel");
 
@@ -227,7 +228,7 @@ async function startAnalysis() {
         const resp = await fetch(`${BACKEND_URL}/analyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ stats_text: text })
+            body: JSON.stringify({ stats_text: limitedText })
         });
 
         const resData = await resp.json();
