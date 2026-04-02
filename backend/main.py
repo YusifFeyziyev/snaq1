@@ -20,18 +20,17 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app) # Bütün mənşələrə icazə verilir
+CORS(app) 
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 def save_log(parser_json, m1, m2, m3, m4):
     try:
-        ev = parser_json.get("ev", {}).get("ad", "?")
-        qon = parser_json.get("qonaq", {}).get("ad", "?")
+        ev = parser_json.get("ev", {}).get("ad", "Ev")
+        qon = parser_json.get("qonaq", {}).get("ad", "Qonaq")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Fayl adı yaratma
         safe_ev = "".join([c for c in ev if c.isalnum()])
         safe_qon = "".join([c for c in qon if c.isalnum()])
         name = f"{ts}_{safe_ev}_vs_{safe_qon}.json"
@@ -41,96 +40,97 @@ def save_log(parser_json, m1, m2, m3, m4):
             "timestamp": ts,
             "match": f"{ev} vs {qon}",
             "scores": {
-                "m1": m1.get("guveni", {}).get("total") if isinstance(m1.get("guveni"), dict) else m1.get("guveni"),
+                "m1": m1.get("guveni"),
                 "m2": m2.get("guveni"),
                 "m3": m3.get("m3_guveni", 0),
-                "m4_final": m4.get("final_guveni")
+                "m4_final": m4.get("sistem_guveni") or m4.get("final_guveni")
             },
-            "oynayiram": m4.get("oynayiram"), # Açar düzəldildi
-            "m4_full_decision": m4,
-            "raw_parser": parser_json
+            "oynayiram": m4.get("oynarim") or m4.get("oynayiram"),
+            "m4_full_decision": m4
         }
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(record, f, ensure_ascii=False, indent=2)
-
-        log.info(f"Analiz uğurla loqlandı: {name}")
     except Exception as e:
         log.warning(f"Loq yazarkən xəta: {e}")
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
+    # JS-in gözlədiyi standart cavab strukturu
+    error_response = lambda msg: jsonify({"success": False, "error": msg, "data": {}})
+    
     body = request.get_json(silent=True)
     if not body or "statistics" not in body:
-        return jsonify({"success": False, "error": "statistics sahəsi lazımdır"}), 400
+        return error_response("Statistika mətni daxil edilməyib."), 400
 
     raw_text = body["statistics"].strip()
     
     # ── 1. PARSER ──
-    log.info("Analiz prosesi başladı...")
-    parser_res = parse_statistics(raw_text)
-    if not parser_res.get("success"):
-        return jsonify({"success": False, "error": parser_res.get("error")}), 500
-    
-    parser_json = parser_res["data"]
+    try:
+        parser_res = parse_statistics(raw_text)
+        if not parser_res.get("success"):
+            return error_response(f"Parser xətası: {parser_res.get('error')}"), 500
+        parser_json = parser_res["data"]
+    except Exception as e:
+        return error_response(f"Məlumat oxunarkən gözlənilməz xəta: {str(e)}"), 500
 
-    # ── 2. M1 + M2 PARALEL (Həqiqi Threading) ──
+    # ── 2. M1 + M2 PARALEL ──
     m1_res, m2_res = {}, {}
-    errors = []
+    m1_err, m2_err = None, None
 
     def task_m1():
+        nonlocal m1_err
         try:
-            res = run_m1(parser_json)
-            m1_res.update(res)
+            m1_res.update(run_m1(parser_json))
         except Exception as e:
-            errors.append(f"M1: {str(e)}")
+            m1_err = str(e)
 
     def task_m2():
+        nonlocal m2_err
         try:
-            res = run_m2(parser_json)
-            m2_res.update(res)
+            m2_res.update(run_m2(parser_json))
         except Exception as e:
-            errors.append(f"M2: {str(e)}")
+            m2_err = str(e)
 
     t1 = threading.Thread(target=task_m1)
     t2 = threading.Thread(target=task_m2)
-
     t1.start()
     t2.start()
-
-    t1.join() # Hər iki model bitənə qədər gözlə
+    t1.join()
     t2.join()
 
-    if errors:
-        log.error(f"Modul xətaları: {errors}")
-        # Kritik deyilsə davam etmək olar, amma m1 kritikdir
-        if any("M1" in e for e in errors):
-            return jsonify({"success": False, "error": "M1 Riyazi modul çökdü"}), 500
+    if m1_err: return error_response(f"Riyazi modul (M1) xətası: {m1_err}"), 500
 
     # ── 3. M3 (Expert) ──
     try:
         m3_res = run_m3(parser_json, m2_res)
     except Exception as e:
         log.error(f"M3 xətası: {e}")
-        return jsonify({"success": False, "error": "M3 modulu xətası"}), 500
+        m3_res = {"m3_guveni": 0, "status": "Error"}
 
     # ── 4. M4 (Final Qərar) ──
     try:
         m4_output = run_m4(m1_res, m2_res, m3_res, parser_json)
-        if not m4_output.get("success"):
-            return jsonify({"success": False, "error": m4_output.get("error")}), 500
         
-        m4_final = m4_output["data"]
+        # ƏGƏR M4-dən "data" gəlmirsə, birbaşa m4_output-u götür
+        m4_final = m4_output.get("data") if m4_output.get("success") else m4_output
+        
+        # JS-in başa düşməsi üçün vacib adları (keys) mütləq əlavə edirik
+        if "sistem_guveni" not in m4_final:
+            m4_final["sistem_guveni"] = m4_final.get("final_guveni") or m4_final.get("guven") or 0
+        if "oynarim" not in m4_final:
+            m4_final["oynarim"] = m4_final.get("oynayiram") or False
+
     except Exception as e:
         log.error(f"M4 xətası: {e}")
-        return jsonify({"success": False, "error": "M4 Final qərar modulu xətası"}), 500
+        return error_response("Final qərar modulu (M4) cavab vermədi."), 500
 
-    # ── 5. LOG VƏ CAVAB ──
+    # ── 5. CAVAB ──
+    # Loq yazmağı arxa planda et (istifadəçini gözlətmə)
     threading.Thread(target=save_log, args=(parser_json, m1_res, m2_res, m3_res, m4_final)).start()
 
     return jsonify({
         "success": True,
-        "match": f"{parser_json.get('ev', {}).get('ad')} vs {parser_json.get('qonaq', {}).get('ad')}",
         "data": {
             "parser": parser_json,
             "m1": m1_res,
@@ -142,8 +142,8 @@ def analyze():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "active", "server_time": datetime.now().isoformat()})
+    return jsonify({"status": "active"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
