@@ -237,7 +237,7 @@ async function startAnalysis() {
             throw new Error(resData.error || "Server xətası baş verdi.");
         }
 
-        const coreData = resData.data;
+        const coreData = resData;
 
         // Kartları doldur (Təhlükəsiz yoxlama ilə)
         fillModCard("M1", coreData.m1?.guveni?.total || coreData.m1?.guveni);
