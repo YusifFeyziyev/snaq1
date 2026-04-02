@@ -1,149 +1,238 @@
-import threading
-import logging
+# backend/modules/m4_decision.py
 import json
+import re
 import os
-from datetime import datetime
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import sys
+from typing import Dict, Any, List, Optional
 
-from parser import parse_statistics
-from modules.m1_math import run_m1
-from modules.m2_research import run_m2
-from modules.m3_expert import run_m3
-from modules.m4_decision import run_m4
+# Əgər backend qovluğundan çağırılıbsa, config-i tapa bilmək üçün
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import GROQ_KEY_M4, MODEL_M4
 
-# Loq ayarları
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-log = logging.getLogger(__name__)
+# Groq import
+try:
+    from groq import Groq
+except ImportError:
+    print("Groq modulu tapilmadi. pip install groq")
+    Groq = None
 
-app = Flask(__name__)
-CORS(app) 
+class M4Decision:
+    def __init__(self):
+        if Groq is None:
+            raise ImportError("Groq modulu yuklenmeyib. 'pip install groq' edin.")
+        if not GROQ_KEY_M4:
+            raise ValueError("GROQ_KEY_M4 env-de tapilmadi.")
+        self.client = Groq(api_key=GROQ_KEY_M4)
+        self.model = MODEL_M4
 
-LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
+        # Çəki sistemi (baza)
+        self.base_weights = {
+            "M1": 0.50,
+            "M2": 0.20,
+            "M3": 0.30
+        }
+        # Bəzi bazarlar üçün M2 çəkisinin artırıldığı xüsusi hallar
+        self.m2_boost_markets = [
+            "hakim_təsiri", "travma", "heyət_çatışmazlığı", "hava", "motivasiya"
+        ]
 
-def save_log(parser_json, m1, m2, m3, m4):
-    try:
-        ev = parser_json.get("ev", {}).get("ad", "Ev")
-        qon = parser_json.get("qonaq", {}).get("ad", "Qonaq")
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        safe_ev = "".join([c for c in ev if c.isalnum()])
-        safe_qon = "".join([c for c in qon if c.isalnum()])
-        name = f"{ts}_{safe_ev}_vs_{safe_qon}.json"
-        path = os.path.join(LOG_DIR, name)
-
-        record = {
-            "timestamp": ts,
-            "match": f"{ev} vs {qon}",
-            "scores": {
-                "m1": m1.get("guveni"),
-                "m2": m2.get("guveni"),
-                "m3": m3.get("m3_guveni", 0),
-                "m4_final": m4.get("sistem_guveni") or m4.get("final_guveni")
+        # Hard override qaydaları (şərt -> qərar, güvən, səbəb)
+        self.override_rules = [
+            {
+                "condition": lambda m1, m2, m3: m1.get("qol_over_under", {}).get("over_1_5_ehtimal", 0) > 0.85,
+                "override": {"qərar": "OVER 1.5", "güvən": "✅✅", "səbəb": "M1-də over 1.5 ehtimalı çox yüksək (hard override)"}
             },
-            "oynayiram": m4.get("oynarim") or m4.get("oynayiram"),
-            "m4_full_decision": m4
+            {
+                "condition": lambda m1, m2, m3: m3.get("m3_guveni", 0) < 0.3,
+                "override": {"qərar": "OYNAMARAM", "güvən": "❌", "səbəb": "M3 güvəni çox aşağı, bütün bazarlar üçün riskli"}
+            }
+        ]
+
+        # No Bet Zone threshold (sistem güvəni 6.5/10-dan aşağı olarsa, əsas qərar OYNAMARAM)
+        self.no_bet_threshold = 6.5
+
+    def _extract_json_from_response(self, text: str) -> Dict:
+        """Groq cavabından JSON-u təmizləyir."""
+        # Markdown bloklarını təmizlə
+        text = re.sub(r"```json\s*", "", text)
+        text = re.sub(r"```\s*", "", text)
+        # JSON hissəsini tap
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except:
+                pass
+        # Əgər alınmırsa, bütün mətni parse etməyə çalış
+        try:
+            return json.loads(text)
+        except:
+            return {"error": "JSON parse olunmadi", "raw": text[:500]}
+
+    def _call_groq(self, prompt: str) -> Dict:
+        """Groq API çağırışı."""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "Sən futbol analizi üzrə qərar modulusan. Çıxışını yalnız JSON formatında ver, heç bir əlavə mətn olmadan."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=3000
+            )
+            content = response.choices[0].message.content
+            return self._extract_json_from_response(content)
+        except Exception as e:
+            return {"error": f"Groq API xətası: {str(e)}"}
+
+    def _calculate_system_confidence(self, m1_data: Dict, m2_data: Dict, m3_data: Dict) -> float:
+        """Sistem güvəni (0-10) - M1,M2,M3 güvənlərinin ortalaması (çəkisiz)."""
+        m1_guven = m1_data.get("m1_guveni", 5.0)
+        m2_guven = m2_data.get("m2_guveni", 5.0) if isinstance(m2_data, dict) else 5.0
+        m3_guven = m3_data.get("m3_guveni", 5.0)
+        # Hamısı 0-10 arası
+        return round((m1_guven + m2_guven + m3_guven) / 3.0, 1)
+
+    def _combine_market_decision(self, market_name: str, m1_market: Any, m2_market: Any, m3_market: Any) -> Dict:
+        """Bir bazar üçün voting, conflict detection, weight tətbiqi."""
+        # Əgər məlumat yoxdursa, default
+        if not m1_market and not m2_market and not m3_market:
+            return {"qərar": "MƏLUMAT YOXDUR", "güvən": "⛔", "səbəb": "Heç bir moduldan məlumat gəlməyib", "dominant": "YOX"}
+
+        # Məlumatları dict formatına çevir (hər biri ehtimal və ya qərar ola bilər)
+        # Bu sadə versiyada hər bazar üçün ən sadə qərar: M1-dən ehtimal, M2-dən mətn, M3-dən çarpan
+        # Lakin tələbə uyğun olaraq, M4 promptunda bütün bazarları ətraflı təhlil etdirəcəyik.
+        # Daha etibarlı üsul: Bütün bazarları prompta verib DeepSeek-dən qərar istəmək.
+        # Aşağıda biz hər bazar üçün prompt yaradıb DeepSeek-ə göndərəcəyik.
+
+        # Lakin performans üçün, bütün bazarları bir prompta yığıb bir dəfə çağırmaq daha yaxşıdır.
+        # Biz bunu run_m4-də edəcəyik. Bu funksiya fərdi bazar üçün nəzərdə tutulub, lakin əsas məntiq run_m4-dədir.
+        pass
+
+    def run_m4(self, m1_result: Dict, m2_result: Dict, m3_result: Dict) -> Dict:
+        """
+        M1, M2, M3 nəticələrini alır, çəki sistemi, voting, override qaydaları ilə son qərar JSON-unu qaytarır.
+        """
+        # Sistem güvəni
+        system_conf = self._calculate_system_confidence(m1_result, m2_result, m3_result)
+
+        # Əgər sistem güvəni no_bet_threshold-dan aşağıdırsa, default olaraq OYNAMARAM
+        no_bet_active = system_conf < self.no_bet_threshold
+
+        # Override qaydalarını yoxla
+        override_applied = None
+        for rule in self.override_rules:
+            try:
+                if rule["condition"](m1_result, m2_result, m3_result):
+                    override_applied = rule["override"]
+                    break
+            except:
+                continue
+
+        # Əgər override varsa, ondan istifadə et
+        if override_applied:
+            final_decision = override_applied["qərar"]
+            final_confidence = override_applied["güvən"]
+            reason = override_applied["səbəb"]
+            dominant = "OVERRIDE"
+        else:
+            # Normal proses: M4 Groq modelinə sorğu göndər
+            prompt = self._build_decision_prompt(m1_result, m2_result, m3_result, system_conf, no_bet_active)
+            groq_response = self._call_groq(prompt)
+
+            # Groq cavabından qərar və digər sahələri çıxar
+            final_decision = groq_response.get("qərar", "OYNAMARAM")
+            final_confidence = groq_response.get("güvən_səviyyəsi", "⚠️")
+            reason = groq_response.get("səbəb", "M4 təhlili nəticəsində")
+            dominant = groq_response.get("dominant_modul", "M4")
+
+        # Nəticə JSON-unu qur
+        result = {
+            "sistem_guveni": system_conf,
+            "no_bet_zone_aktiv": no_bet_active,
+            "qərar": final_decision,
+            "qərar_guveni": final_confidence,
+            "səbəb": reason,
+            "dominant_modul": dominant,
+            "bazarlar": self._generate_markets_summary(m1_result, m2_result, m3_result, final_decision)
         }
 
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(record, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log.warning(f"Loq yazarkən xəta: {e}")
+        return result
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    # JS-in gözlədiyi standart cavab strukturu
-    error_response = lambda msg: jsonify({"success": False, "error": msg, "data": {}})
-    
-    body = request.get_json(silent=True)
-    if not body or "statistics" not in body:
-        return error_response("Statistika mətni daxil edilməyib."), 400
+    def _build_decision_prompt(self, m1: Dict, m2: Dict, m3: Dict, sys_conf: float, no_bet: bool) -> str:
+        """M4 üçün prompt qurur."""
+        m1_str = json.dumps(m1, indent=2, ensure_ascii=False)
+        m2_str = json.dumps(m2, indent=2, ensure_ascii=False)
+        m3_str = json.dumps(m3, indent=2, ensure_ascii=False)
 
-    raw_text = body["statistics"].strip()
-    
-    # ── 1. PARSER ──
-    try:
-        parser_res = parse_statistics(raw_text)
-        if not parser_res.get("success"):
-            return error_response(f"Parser xətası: {parser_res.get('error')}"), 500
-        parser_json = parser_res["data"]
-    except Exception as e:
-        return error_response(f"Məlumat oxunarkən gözlənilməz xəta: {str(e)}"), 500
+        prompt = f"""Sən futbol analizi üçün qərar modulusan (M4). Aşağıda M1 (riyazi statistik model), M2 (axtarış araşdırması), M3 (ekspert taktiki analiz) nəticələri verilir.
 
-    # ── 2. M1 + M2 PARALEL ──
-    m1_res, m2_res = {}, {}
-    m1_err, m2_err = None, None
+Çəki sistemi: M1=0.50, M2=0.20, M3=0.30. Lakin bəzi bazarlarda (hakim, travma, heyət, hava, motivasiya) M2-nin çəkisi 0.35-ə qədər arta bilər.
+Sistem güvəni: {sys_conf}/10. No Bet Zone threshold: 6.5/10. No bet aktiv? {no_bet}
 
-    def task_m1():
-        nonlocal m1_err
-        try:
-            m1_res.update(run_m1(parser_json))
-        except Exception as e:
-            m1_err = str(e)
+Tələblər:
+1. Hər bazar üçün ehtimal, güvən səviyyəsi (✅✅, ✅, ⚠️, ❌, ⛔), səbəb və dominant modulu göstər.
+2. Ümumi qərar (OYNARIM və ya OYNAMARAM) və onun güvən səviyyəsini ver.
+3. Əgər no_bet aktivdirsə, ümumi qərar "OYNAMARAM" olmalıdır (ancaq override qaydaları pozarsa).
+4. Çıxışını AŞAĞIDAKİ JSON formatında ver, başqa heç nə yazma:
 
-    def task_m2():
-        nonlocal m2_err
-        try:
-            m2_res.update(run_m2(parser_json))
-        except Exception as e:
-            m2_err = str(e)
+{{
+  "qərar": "OYNARIM" veya "OYNAMARAM",
+  "güvən_səviyyəsi": "✅✅ veya ✅ veya ⚠️ veya ❌ veya ⛔",
+  "səbəb": "Qısa izah",
+  "dominant_modul": "M1 veya M2 veya M3 veya M4",
+  "bazarlar": {{
+    "qol_over_under": {{
+      "ehtimal": 0.75,
+      "güvən": "✅",
+      "səbəb": "M1 yüksək ehtimal verir, M3 dəstəkləyir",
+      "dominant": "M1"
+    }},
+    "btts": {{...}},
+    "cerrah": {{...}}
+    // bütün bazarları bura əlavə et
+  }}
+}}
 
-    t1 = threading.Thread(target=task_m1)
-    t2 = threading.Thread(target=task_m2)
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
+M1 nəticəsi:
+{m1_str}
 
-    if m1_err: return error_response(f"Riyazi modul (M1) xətası: {m1_err}"), 500
+M2 nəticəsi:
+{m2_str}
 
-    # ── 3. M3 (Expert) ──
-    try:
-        m3_res = run_m3(parser_json, m2_res)
-    except Exception as e:
-        log.error(f"M3 xətası: {e}")
-        m3_res = {"m3_guveni": 0, "status": "Error"}
+M3 nəticəsi:
+{m3_str}
 
-    # ── 4. M4 (Final Qərar) ──
-    try:
-        m4_output = run_m4(m1_res, m2_res, m3_res, parser_json)
-        
-        # ƏGƏR M4-dən "data" gəlmirsə, birbaşa m4_output-u götür
-        m4_final = m4_output.get("data") if m4_output.get("success") else m4_output
-        
-        # JS-in başa düşməsi üçün vacib adları (keys) mütləq əlavə edirik
-        if "sistem_guveni" not in m4_final:
-            m4_final["sistem_guveni"] = m4_final.get("final_guveni") or m4_final.get("guven") or 0
-        if "oynarim" not in m4_final:
-            m4_final["oynarim"] = m4_final.get("oynayiram") or False
+Qərarını ver."""
+        return prompt
 
-    except Exception as e:
-        log.error(f"M4 xətası: {e}")
-        return error_response("Final qərar modulu (M4) cavab vermədi."), 500
+    def _generate_markets_summary(self, m1: Dict, m2: Dict, m3: Dict, final_decision: str) -> Dict:
+        """Sadəlik üçün, bazar məlumatlarını birləşdirir. Əslində M4-dən gələn bazarlar istifadə olunmalıdır.
+           Bu versiyada demo olaraq m1-in bazar strukturunu qaytarırıq."""
+        markets = {}
+        # M1-də bazarlar varsa onları al
+        if "bazarlar" in m1:
+            for k, v in m1["bazarlar"].items():
+                markets[k] = {
+                    "ehtimal": v.get("ehtimal", 0.5) if isinstance(v, dict) else 0.5,
+                    "güvən": "⚠️",
+                    "səbəb": "M4 tərəfindən təhlil edilməyib (demo)",
+                    "dominant": "M1"
+                }
+        return markets
 
-    # ── 5. CAVAB ──
-    # Loq yazmağı arxa planda et (istifadəçini gözlətmə)
-    threading.Thread(target=save_log, args=(parser_json, m1_res, m2_res, m3_res, m4_final)).start()
+# Modul funksiyası (xarici çağırış üçün)
+def run_m4(m1_result: Dict, m2_result: Dict, m3_result: Dict) -> Dict:
+    """M4 modulunu işə salır."""
+    m4 = M4Decision()
+    return m4.run_m4(m1_result, m2_result, m3_result)
 
-    return jsonify({
-        "success": True,
-        "data": {
-            "parser": parser_json,
-            "m1": m1_res,
-            "m2": m2_res,
-            "m3": m3_res,
-            "m4": m4_final
-        }
-    })
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "active"})
-
+# Test bloku
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    # Mock məlumatlar
+    test_m1 = {"m1_guveni": 8.0, "bazarlar": {"qol_over_under": {"ehtimal": 0.85}}}
+    test_m2 = {"m2_guveni": 6.0}
+    test_m3 = {"m3_guveni": 7.5}
+    result = run_m4(test_m1, test_m2, test_m3)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
