@@ -1,58 +1,175 @@
 <!DOCTYPE html>
 <html lang="az">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>⚽ Futbol Analiz Sistemi</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>⚽ Futbol Analiz</title>
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
 
-  <header>
-    <div class="logo">⚽ Futbol Analiz</div>
-    <div class="subtitle">AI-Powered Match Analysis System</div>
-  </header>
+<header>
+  <div class="logo">⚽ Futbol Analiz</div>
+  <div class="subtitle">AI-Powered Match Analysis System</div>
+</header>
 
-  <section class="input-section">
-    <textarea id="statsInput" placeholder="SoccerStats mətnini bura yapışdırın..."></textarea>
-    <div class="button-group">
-        <button id="analyzeBtn" onclick="startAnalysis()">
-          <span id="btnText">Analizi Başlat</span>
-          <span id="btnSpinner" class="spinner hidden"></span>
-        </button>
-        <button id="resetBtn" onclick="location.reload()" class="btn-secondary">Təmizlə</button>
+<section class="input-section">
+  <textarea id="statsInput" placeholder="SoccerStats mətnini bura yapışdırın..."></textarea>
+  <div class="btn-row">
+    <button id="analyzeBtn" onclick="startAnalysis()">
+      <span id="btnText">Analiz Et</span>
+      <span id="btnSpinner" class="spinner hidden"></span>
+    </button>
+    <button onclick="location.reload()" class="btn-sec">Təmizlə</button>
+  </div>
+</section>
+
+<div id="errorBox" class="error-box hidden"></div>
+
+<div id="resultPanel" class="hidden">
+
+  <!-- OYUN BAŞLIĞI -->
+  <div class="match-header">
+    <div class="team" id="team1Name">—</div>
+    <div class="vs-block">
+      <span class="vs">VS</span>
+      <span class="league-tag" id="leagueTag">Liqa</span>
     </div>
-  </section>
-
-  <div id="errorBox" class="error-box hidden"></div>
-
-  <div id="resultPanel" class="hidden">
-    
-    <section class="top-section">
-      <h2>🏆 Top Tövsiyələr</h2>
-      <div id="topPicks" class="top-picks">
-        </div>
-    </section>
-
-    <section class="final-section" id="finalSection">
-      <h2>⚖️ M4 Final Qərar</h2>
-      <div class="final-grid">
-        <div class="final-row">
-          <span>Sistem Güvəni</span>
-          <div class="conf-bar-wrap"><div class="conf-bar-fill" id="fillSistem"></div></div>
-          <span id="lblSistem">0%</span>
-        </div>
-        <div class="final-row">
-          <span>Qərar Güvəni</span>
-          <div class="conf-bar-wrap"><div class="conf-bar-fill" id="fillQerar"></div></div>
-          <span id="lblQerar">0%</span>
-        </div>
-      </div>
-      <div class="final-verdict" id="finalVerdict"></div>
-      <div class="final-reason" id="finalReason"></div>
-    </section>
+    <div class="team" id="team2Name">—</div>
   </div>
 
-  <script src="app.js"></script>
+  <!-- MODUL KARTLARI -->
+  <div class="section-title">🔬 Modul Güvən Səviyyələri</div>
+  <div class="mod-grid">
+    <div class="mod-card">
+      <div class="mod-top">
+        <span class="mod-icon">📐</span>
+        <span class="mod-label">M1 Riyazi</span>
+      </div>
+      <div class="mod-score" id="scoreM1">—</div>
+      <div class="prog-bar"><div class="prog-fill" id="barM1"></div></div>
+      <div class="mod-desc">Poisson modeli, statistik ehtimallar</div>
+    </div>
+    <div class="mod-card">
+      <div class="mod-top">
+        <span class="mod-icon">🔍</span>
+        <span class="mod-label">M2 Araşdırma</span>
+      </div>
+      <div class="mod-score" id="scoreM2">—</div>
+      <div class="prog-bar"><div class="prog-fill" id="barM2"></div></div>
+      <div class="mod-desc">Hakim, zədə, hava, motivasiya</div>
+    </div>
+    <div class="mod-card">
+      <div class="mod-top">
+        <span class="mod-icon">🧠</span>
+        <span class="mod-label">M3 Ekspert</span>
+      </div>
+      <div class="mod-score" id="scoreM3">—</div>
+      <div class="prog-bar"><div class="prog-fill" id="barM3"></div></div>
+      <div class="mod-desc">Taktiki analiz, çarpanlar</div>
+    </div>
+    <div class="mod-card">
+      <div class="mod-top">
+        <span class="mod-icon">⚖️</span>
+        <span class="mod-label">M4 Qərar</span>
+      </div>
+      <div class="mod-score" id="scoreM4">—</div>
+      <div class="prog-bar"><div class="prog-fill" id="barM4"></div></div>
+      <div class="mod-desc">Çəki sistemi, final qərar</div>
+    </div>
+  </div>
+
+  <!-- 1X2 BAZARI -->
+  <div class="section-title">🥅 1X2 Nəticə Bazarı</div>
+  <div class="outcome-grid">
+    <div class="outcome-card" id="card1x2Home">
+      <div class="out-label">Ev Qalibiyyəti</div>
+      <div class="out-pct" id="pct1x2Home">—</div>
+      <div class="out-badge" id="bdg1x2Home"></div>
+    </div>
+    <div class="outcome-card draw-card" id="card1x2Draw">
+      <div class="out-label">Heç-Heçə</div>
+      <div class="out-pct" id="pct1x2Draw">—</div>
+      <div class="out-badge" id="bdg1x2Draw"></div>
+    </div>
+    <div class="outcome-card" id="card1x2Away">
+      <div class="out-label">Qonaq Qalibiyyəti</div>
+      <div class="out-pct" id="pct1x2Away">—</div>
+      <div class="out-badge" id="bdg1x2Away"></div>
+    </div>
+  </div>
+
+  <!-- OVER/UNDER -->
+  <div class="section-title">⚽ Qol Over/Under</div>
+  <div class="market-grid" id="ouGrid"></div>
+
+  <!-- BTTS -->
+  <div class="section-title">🎯 Hər İki Komanda Qol Atar</div>
+  <div class="outcome-grid">
+    <div class="outcome-card" id="cardBttsYes">
+      <div class="out-label">HƏR İKİSİ ATAR ✅</div>
+      <div class="out-pct" id="pctBttsYes">—</div>
+      <div class="out-badge" id="bdgBttsYes"></div>
+    </div>
+    <div class="outcome-card" id="cardBttsNo">
+      <div class="out-label">YOX ❌</div>
+      <div class="out-pct" id="pctBttsNo">—</div>
+      <div class="out-badge" id="bdgBttsNo"></div>
+    </div>
+  </div>
+
+  <!-- İLK YARI -->
+  <div class="section-title">⏱ İlk Yarı Analizi</div>
+  <div class="half-grid">
+    <div class="half-card">
+      <div class="half-title">1X2 (İlk Yarı)</div>
+      <div class="half-rows" id="fh1x2"></div>
+    </div>
+    <div class="half-card">
+      <div class="half-title">Qollar (İlk Yarı)</div>
+      <div class="half-rows" id="fhOu"></div>
+    </div>
+    <div class="half-card">
+      <div class="half-title">BTTS (İlk Yarı)</div>
+      <div class="half-rows" id="fhBtts"></div>
+    </div>
+  </div>
+
+  <!-- KORNERLƏR -->
+  <div class="section-title">🚩 Korner Bazarı</div>
+  <div class="market-grid" id="cornerGrid"></div>
+
+  <!-- DİGƏR BAZARLAR -->
+  <div class="section-title">📊 Digər Bazarlar</div>
+  <div class="other-grid" id="otherGrid"></div>
+
+  <!-- DƏQİQ HESAB -->
+  <div class="section-title">🎲 Ən Çox Gözlənilən Hesablar</div>
+  <div class="scores-grid" id="scoresGrid"></div>
+
+  <!-- M2 ARAŞDIRMA -->
+  <div class="section-title">🔍 M2 Araşdırma Nəticələri</div>
+  <div class="research-grid" id="researchGrid"></div>
+
+  <!-- M3 TAKTİKİ -->
+  <div class="section-title">🧠 M3 Taktiki Analiz</div>
+  <div class="tactical-box" id="tacticalBox"></div>
+
+  <!-- FİNAL QƏRAR -->
+  <div class="section-title">⚖️ Final Qərar</div>
+  <div class="final-box">
+    <div class="conf-row">
+      <span class="conf-label">Sistem Güvəni</span>
+      <div class="conf-bar"><div class="conf-fill" id="fillSistem"></div></div>
+      <span class="conf-val" id="lblSistem">0/10</span>
+    </div>
+    <div id="finalVerdict" class="verdict"></div>
+    <div id="finalReason" class="final-reason"></div>
+    <div id="finalDominant" class="final-dominant"></div>
+  </div>
+
+</div>
+
+<script src="app.js"></script>
 </body>
 </html>
