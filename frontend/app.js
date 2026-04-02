@@ -227,7 +227,7 @@ async function startAnalysis() {
         const resp = await fetch(`${BACKEND_URL}/analyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ statistics: text })
+            body: JSON.stringify({ stats_text: text })
         });
 
         const resData = await resp.json();
