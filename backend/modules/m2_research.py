@@ -9,7 +9,7 @@ try:
     from config import GROQ_KEY_M2, MODEL_M2, TAVILY_KEY, SERPER_KEY
 except ImportError:
     GROQ_KEY_M2 = os.getenv("GROQ_KEY_M2")
-    MODEL_M2    = os.getenv("MODEL_M2", "llama-3.3-70b-versatile")
+    MODEL_M2    = os.getenv("MODEL_M2", "gemini-2.5-flash")
     TAVILY_KEY  = os.getenv("TAVILY_KEY")
     SERPER_KEY  = os.getenv("SERPER_KEY")
 

@@ -15,6 +15,6 @@ SERPER_KEY  = os.getenv("SERPER_KEY")
 
 # MODEL ADLARI
 MODEL_PARSER = "llama-3.3-70b-versatile"
-MODEL_M2     = "llama-3.3-70b-versatile"
+MODEL_M2     = "gemini-2.5-flash"
 MODEL_M3     = "llama-3.3-70b-versatile"
 MODEL_M4     = "llama-3.3-70b-versatile"
