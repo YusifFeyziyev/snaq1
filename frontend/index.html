@@ -8,7 +8,6 @@
 </head>
 <body>
 
-<!-- MODAL OVERLAY (M2/M3/M4 detaylar) -->
 <div id="moduleModal" class="modal-overlay" onclick="closeModal(event)">
   <div class="modal-card">
     <button class="modal-close" onclick="closeModal()">✕</button>
@@ -46,15 +45,26 @@
     <div class="team" id="team2Name">—</div>
   </div>
 
-  <!-- MÖVSÜM PERFORMANS QRAFİKİ -->
+  <!-- MÖVSÜM TRAYEKTORİYA QRAFİKİ -->
   <div class="section-title collapsible" onclick="toggleSection('secChart')">
-    📈 Komanda Müqayisə Qrafiki <span class="chevron" id="chev-secChart">▼</span>
+    📈 Mövsüm Trayektoriyası <span class="chevron" id="chev-secChart">▼</span>
   </div>
   <div id="secChart" class="section-content open">
-    <div class="chart-container">
+    <div class="chart-container" id="chartContainerWrapper">
       <div class="chart-legend" id="chartLegend"></div>
-      <canvas id="performanceChart"></canvas>
+      <canvas id="trajectoryChart"></canvas>
+      <div class="traj-note" id="trajNote">
+        ⚙️ Trayektoriya mövcud statistik göstəricilər əsasında modelləşdirilib (15 oyun)
+      </div>
     </div>
+  </div>
+
+  <!-- KOMANDA MÜQAYİSƏ CƏDVƏLİ -->
+  <div class="section-title collapsible" onclick="toggleSection('secComparison')">
+    📊 Komanda Müqayisə Cədvəli <span class="chevron" id="chev-secComparison">▶</span>
+  </div>
+  <div id="secComparison" class="section-content">
+    <div id="comparisonTableWrapper"></div>
   </div>
 
   <!-- MODUL KARTLARI -->
@@ -213,9 +223,17 @@
     <div class="tactical-box" id="tacticalBox"></div>
   </div>
 
+  <!-- M4 BAZAR QƏRARLARI -->
+  <div class="section-title collapsible" onclick="toggleSection('secM4Markets')">
+    ⚖️ Bazar Qərarları <span class="chevron" id="chev-secM4Markets">▼</span>
+  </div>
+  <div id="secM4Markets" class="section-content open">
+    <div class="m4-markets-grid" id="m4MarketsGrid"></div>
+  </div>
+
   <!-- FİNAL QƏRAR -->
   <div class="section-title collapsible" onclick="toggleSection('secFinal')">
-    ⚖️ Final Qərar <span class="chevron" id="chev-secFinal">▼</span>
+    🏆 Final Qərar <span class="chevron" id="chev-secFinal">▼</span>
   </div>
   <div id="secFinal" class="section-content open">
     <div class="final-box">
@@ -224,6 +242,7 @@
         <div class="conf-bar"><div class="conf-fill" id="fillSistem"></div></div>
         <span class="conf-val" id="lblSistem">0/10</span>
       </div>
+      <div class="modul-guven-row" id="modulGuvenRow"></div>
       <div id="finalVerdict" class="verdict"></div>
       <div id="finalReason" class="final-reason"></div>
       <div id="finalDominant" class="final-dominant"></div>
