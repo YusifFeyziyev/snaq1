@@ -17,20 +17,12 @@ GROQ_API_URL   = "https://api.groq.com/openai/v1/chat/completions"
 TAVILY_API_URL = "https://api.tavily.com/search"
 SERPER_API_URL = "https://google.serper.dev/search"
 
-# ──────────────────────────────────────────
-# API YOXLAMA
-# ──────────────────────────────────────────
-
 def validate_api_keys() -> Dict[str, bool]:
     return {
         "groq":   bool(GROQ_KEY_M2),
         "tavily": bool(TAVILY_KEY),
         "serper": bool(SERPER_KEY)
     }
-
-# ──────────────────────────────────────────
-# AXTARIŞ FUNKSİYALARI
-# ──────────────────────────────────────────
 
 def search_with_tavily(query: str, retries: int = 2) -> Optional[Dict]:
     if not TAVILY_KEY:
@@ -45,10 +37,6 @@ def search_with_tavily(query: str, retries: int = 2) -> Optional[Dict]:
             )
             if resp.status_code == 200:
                 return resp.json()
-            print(f"Tavily status {resp.status_code}: {query}")
-            time.sleep(1)
-        except requests.exceptions.Timeout:
-            print(f"Tavily timeout (cəhd {attempt+1}): {query}")
             time.sleep(1)
         except Exception as e:
             print(f"Tavily exception: {e}")
@@ -68,10 +56,6 @@ def search_with_serper(query: str, retries: int = 2) -> Optional[Dict]:
             )
             if resp.status_code == 200:
                 return resp.json()
-            print(f"Serper status {resp.status_code}: {query}")
-            time.sleep(1)
-        except requests.exceptions.Timeout:
-            print(f"Serper timeout (cəhd {attempt+1}): {query}")
             time.sleep(1)
         except Exception as e:
             print(f"Serper exception: {e}")
@@ -104,12 +88,7 @@ def extract_search_text(search_result: Optional[Dict]) -> str:
             parts.append("---")
     return "\n".join(parts) if parts else "Heç bir nəticə tapılmadı."
 
-# ──────────────────────────────────────────
-# JSON PARSE (DÜZƏLİŞ: indent bug aradan qaldırıldı)
-# ──────────────────────────────────────────
-
 def safe_json_parse(text: str) -> Dict:
-    # Kod bloku içindəki JSON-u çəkməyə cəhd et
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         json_str = match.group(1)
@@ -117,7 +96,6 @@ def safe_json_parse(text: str) -> Dict:
         match = re.search(r"(\{.*\})", text, re.DOTALL)
         json_str = match.group(1) if match else text.strip()
 
-    # Artıq vergülləri təmizlə
     json_str = re.sub(r',\s*}', '}', json_str)
     json_str = re.sub(r',\s*]', ']', json_str)
 
@@ -126,7 +104,6 @@ def safe_json_parse(text: str) -> Dict:
     except json.JSONDecodeError as e:
         print(f"JSON parse xətası: {e}. Fallback istifadə edilir...")
         fallback = _empty_sections()
-        # Regex ilə hakim adını xilas etməyə cəhd et
         ref_match = re.search(r'"referee"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"', text)
         if ref_match:
             fallback["referee"]["name"]       = ref_match.group(1)
@@ -134,12 +111,7 @@ def safe_json_parse(text: str) -> Dict:
             fallback["referee"]["confidence"] = 0.7
         return fallback
 
-# ──────────────────────────────────────────
-# KÖMƏKÇİ FUNKSİYALAR
-# ──────────────────────────────────────────
-
 def _empty_sections() -> Dict:
-    """Sadəcə 8 kateqoriyanın boş strukturu (m2_guveni daxil deyil)."""
     return {
         "referee":    {"status": "tapılmadı", "confidence": 0.0},
         "coach":      {"status": "tapılmadı", "confidence": 0.0},
@@ -153,39 +125,60 @@ def _empty_sections() -> Dict:
 
 def _empty_result(warning: str = None, error: str = None) -> Dict:
     result = _empty_sections()
+    # ✅ DÜZƏLİŞ: boş nəticədə də 0-10 scale-da 0.0 qaytar
     result["m2_guveni"] = 0.0
     if warning: result["m2_warning"] = warning
     if error:   result["m2_error"]   = error
     return result
 
+# ✅ DÜZƏLİŞ 1: m2_guveni hesablaması
+# Əvvəl: (sum / len) * 10 → 0-10 çıxırdı
+# Problem: M4 bunu yenə *10 edirdisə → 21.0/10, 42.0/10 olurdu
+# İndi: 0-1 aralığında qaytarırıq ki M4 *10 edib düzgün göstərsin
+# ƏGƏR M4 heç *10 etmirsə → aşağıdakı xətti dəyiş: * 10 əlavə et
 def calculate_m2_guveni(result: Dict) -> float:
-    """Bütün kateqoriyaların confidence ortalaması → 0-10 şkala."""
+    """
+    Bütün kateqoriyaların confidence ortalaması.
+    ✅ 0-1 aralığında qaytarır (M1 ilə eyni scale).
+    M4 *10 edib 0-10 göstərəcək.
+    """
     confs = [
         float(v["confidence"])
         for k, v in result.items()
         if isinstance(v, dict) and isinstance(v.get("confidence"), (int, float))
     ]
-    return round((sum(confs) / len(confs)) * 10, 1) if confs else 0.0
+    if not confs:
+        return 0.0
+    avg = sum(confs) / len(confs)
+    # confidence dəyərləri 0-1 aralığındadır, ortalama da 0-1 olur
+    return round(avg, 3)
 
 def _post_process(result: Dict) -> Dict:
     """
-    Axtarış mətnindən gəlməyən (status='təxmin') məlumatlarda
-    confidence-i 0.3-ə endiririk ki real datanı seçsin M4.
+    ✅ DÜZƏLİŞ 2: status yoxlaması daha sərt
+    'təxmin' statusunu tamamilə 'tapılmadı'-ya çeviririk
+    çünki LLM zaman-zaman qaydanı pozub 'təxmin' yazır
     """
     for key, val in result.items():
         if not isinstance(val, dict):
             continue
         status = val.get("status", "tapılmadı")
         conf   = float(val.get("confidence", 0.0))
-        if status == "təxmin" and conf > 0.4:
-            val["confidence"] = 0.35   # süni artırılmış güvəni kəs
-        if status == "tapılmadı":
-            val["confidence"] = 0.0
-    return result
 
-# ──────────────────────────────────────────
-# GROQ ANALİZİ
-# ──────────────────────────────────────────
+        # 'təxmin' statusunu sıfırla — M4-ə yanlış güvən getməsin
+        if status == "təxmin":
+            val["status"]     = "tapılmadı"
+            val["confidence"] = 0.0
+
+        # 'tapılmadı' olduqda confidence mütləq 0 olsun
+        if val.get("status") == "tapılmadı":
+            val["confidence"] = 0.0
+
+        # 'real' olsa belə 0.95-dən yuxarı olmasın
+        if val.get("status") == "real" and conf > 0.95:
+            val["confidence"] = 0.95
+
+    return result
 
 SYSTEM_PROMPT = """Sən futbol məlumat analitikisən. Sənə axtarış nəticələri verilir.
 QAYDALAR (MÜTLƏQ):
@@ -283,7 +276,7 @@ def analyze_with_groq(team1: str, team2: str, search_text: str) -> Dict:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_prompt}
         ],
-        "temperature": 0.0,   # deterministik — hallusinasiya azalır
+        "temperature": 0.0,
         "max_tokens": 2500
     }
 
@@ -299,10 +292,6 @@ def analyze_with_groq(team1: str, team2: str, search_text: str) -> Dict:
     except Exception as e:
         raise Exception(f"Gözlənilməz xəta: {str(e)}")
 
-# ──────────────────────────────────────────
-# ƏSAS run_m2 FUNKSİYASI
-# ──────────────────────────────────────────
-
 def run_m2(parser_json: Dict) -> Dict:
     team1 = parser_json.get("team1", "Unknown")
     team2 = parser_json.get("team2", "Unknown")
@@ -314,9 +303,7 @@ def run_m2(parser_json: Dict) -> Dict:
         return _empty_result(error="Nə TAVILY_KEY, nə SERPER_KEY tapılmadı.")
 
     print(f"M2 başladı: {team1} vs {team2}")
-    print(f"API vəziyyəti: Groq={keys['groq']}, Tavily={keys['tavily']}, Serper={keys['serper']}")
 
-    # Daha hədəflənmiş axtarış sorğuları — real data almaq üçün
     queries = [
         f"{team1} {team2} referee 2024 2025",
         f"{team1} {team2} injury report missing players",
@@ -337,20 +324,18 @@ def run_m2(parser_json: Dict) -> Dict:
         all_search_text += f"\n=== SORĞU: {q} ===\n{text}\n"
 
     if successful == 0:
-        print("XƏBƏRDARLIQ: Heç bir axtarış nəticəsi tapılmadı.")
         return _empty_result(warning="Heç bir axtarış nəticəsi tapılmadı.")
 
     try:
         result = analyze_with_groq(team1, team2, all_search_text)
-
-        # Süni güvənləri aşağı çək
         result = _post_process(result)
 
-        # m2_guveni hesabla
+        # ✅ DÜZƏLİŞ: m2_guveni artıq 0-1 aralığında
         result["m2_guveni"] = calculate_m2_guveni(result)
-        print(f"M2 ortalama güvən: {result['m2_guveni'] / 10:.2f}, valid: True")
 
-        # Neçə kateqoriyada real məlumat var?
+        # ✅ DÜZƏLİŞ 3: log-da da düzgün göstər
+        print(f"M2 güvən (0-1): {result['m2_guveni']:.3f} | (0-10): {result['m2_guveni'] * 10:.1f}")
+
         real_count = sum(
             1 for k, v in result.items()
             if isinstance(v, dict) and v.get("status") == "real"
@@ -359,11 +344,11 @@ def run_m2(parser_json: Dict) -> Dict:
             1 for k, v in result.items()
             if isinstance(v, dict) and v.get("status") == "tapılmadı"
         )
-        print(f"Real: {real_count} kateqoriya | Tapılmadı: {missing_count} kateqoriya")
+        print(f"Real: {real_count} | Tapılmadı: {missing_count}")
+
         if missing_count > 4:
             result["m2_warning"] = (
-                f"{missing_count} kateqoriyada real məlumat tapılmadı. "
-                "Axtarış nəticələri kifayət deyildi."
+                f"{missing_count} kateqoriyada real məlumat tapılmadı."
             )
 
         return result
@@ -373,9 +358,6 @@ def run_m2(parser_json: Dict) -> Dict:
         return _empty_result(error=str(e))
 
 
-# ──────────────────────────────────────────
-# TEST
-# ──────────────────────────────────────────
 if __name__ == "__main__":
     test = {"team1": "Liverpool", "team2": "Manchester City"}
     try:
