@@ -8,6 +8,14 @@
 </head>
 <body>
 
+<!-- MODAL OVERLAY (M2/M3/M4 detaylar) -->
+<div id="moduleModal" class="modal-overlay" onclick="closeModal(event)">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
 <header>
   <div class="logo">⚽ Futbol Analiz</div>
   <div class="subtitle">AI-Powered Match Analysis System</div>
@@ -38,10 +46,21 @@
     <div class="team" id="team2Name">—</div>
   </div>
 
+  <!-- MÖVSÜM PERFORMANS QRAFİKİ -->
+  <div class="section-title collapsible" onclick="toggleSection('secChart')">
+    📈 Komanda Müqayisə Qrafiki <span class="chevron" id="chev-secChart">▼</span>
+  </div>
+  <div id="secChart" class="section-content open">
+    <div class="chart-container">
+      <div class="chart-legend" id="chartLegend"></div>
+      <canvas id="performanceChart"></canvas>
+    </div>
+  </div>
+
   <!-- MODUL KARTLARI -->
   <div class="section-title">🔬 Modul Güvən Səviyyələri</div>
   <div class="mod-grid">
-    <div class="mod-card">
+    <div class="mod-card" id="cardM1">
       <div class="mod-top">
         <span class="mod-icon">📐</span>
         <span class="mod-label">M1 Riyazi</span>
@@ -50,28 +69,31 @@
       <div class="prog-bar"><div class="prog-fill" id="barM1"></div></div>
       <div class="mod-desc">Poisson modeli, statistik ehtimallar</div>
     </div>
-    <div class="mod-card">
+    <div class="mod-card clickable" id="cardM2" onclick="openModuleDetail('M2')">
       <div class="mod-top">
         <span class="mod-icon">🔍</span>
         <span class="mod-label">M2 Araşdırma</span>
+        <span class="mod-click-hint">tap</span>
       </div>
       <div class="mod-score" id="scoreM2">—</div>
       <div class="prog-bar"><div class="prog-fill" id="barM2"></div></div>
       <div class="mod-desc">Hakim, zədə, hava, motivasiya</div>
     </div>
-    <div class="mod-card">
+    <div class="mod-card clickable" id="cardM3" onclick="openModuleDetail('M3')">
       <div class="mod-top">
         <span class="mod-icon">🧠</span>
         <span class="mod-label">M3 Ekspert</span>
+        <span class="mod-click-hint">tap</span>
       </div>
       <div class="mod-score" id="scoreM3">—</div>
       <div class="prog-bar"><div class="prog-fill" id="barM3"></div></div>
       <div class="mod-desc">Taktiki analiz, çarpanlar</div>
     </div>
-    <div class="mod-card">
+    <div class="mod-card clickable" id="cardM4" onclick="openModuleDetail('M4')">
       <div class="mod-top">
         <span class="mod-icon">⚖️</span>
         <span class="mod-label">M4 Qərar</span>
+        <span class="mod-click-hint">tap</span>
       </div>
       <div class="mod-score" id="scoreM4">—</div>
       <div class="prog-bar"><div class="prog-fill" id="barM4"></div></div>
@@ -80,92 +102,132 @@
   </div>
 
   <!-- 1X2 BAZARI -->
-  <div class="section-title">🥅 1X2 Nəticə Bazarı</div>
-  <div class="outcome-grid">
-    <div class="outcome-card" id="card1x2Home">
-      <div class="out-label">Ev Qalibiyyəti</div>
-      <div class="out-pct" id="pct1x2Home">—</div>
-      <div class="out-badge" id="bdg1x2Home"></div>
-    </div>
-    <div class="outcome-card draw-card" id="card1x2Draw">
-      <div class="out-label">Heç-Heçə</div>
-      <div class="out-pct" id="pct1x2Draw">—</div>
-      <div class="out-badge" id="bdg1x2Draw"></div>
-    </div>
-    <div class="outcome-card" id="card1x2Away">
-      <div class="out-label">Qonaq Qalibiyyəti</div>
-      <div class="out-pct" id="pct1x2Away">—</div>
-      <div class="out-badge" id="bdg1x2Away"></div>
+  <div class="section-title collapsible" onclick="toggleSection('sec1x2')">
+    🥅 1X2 Nəticə Bazarı <span class="chevron" id="chev-sec1x2">▶</span>
+  </div>
+  <div id="sec1x2" class="section-content">
+    <div class="outcome-grid">
+      <div class="outcome-card" id="card1x2Home">
+        <div class="out-label">Ev Qalibiyyəti</div>
+        <div class="out-pct" id="pct1x2Home">—</div>
+        <div class="out-badge" id="bdg1x2Home"></div>
+      </div>
+      <div class="outcome-card draw-card" id="card1x2Draw">
+        <div class="out-label">Heç-Heçə</div>
+        <div class="out-pct" id="pct1x2Draw">—</div>
+        <div class="out-badge" id="bdg1x2Draw"></div>
+      </div>
+      <div class="outcome-card" id="card1x2Away">
+        <div class="out-label">Qonaq Qalibiyyəti</div>
+        <div class="out-pct" id="pct1x2Away">—</div>
+        <div class="out-badge" id="bdg1x2Away"></div>
+      </div>
     </div>
   </div>
 
   <!-- OVER/UNDER -->
-  <div class="section-title">⚽ Qol Over/Under</div>
-  <div class="market-grid" id="ouGrid"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secOU')">
+    ⚽ Qol Over/Under <span class="chevron" id="chev-secOU">▶</span>
+  </div>
+  <div id="secOU" class="section-content">
+    <div class="market-grid" id="ouGrid"></div>
+  </div>
 
   <!-- BTTS -->
-  <div class="section-title">🎯 Hər İki Komanda Qol Atar</div>
-  <div class="outcome-grid">
-    <div class="outcome-card" id="cardBttsYes">
-      <div class="out-label">HƏR İKİSİ ATAR ✅</div>
-      <div class="out-pct" id="pctBttsYes">—</div>
-      <div class="out-badge" id="bdgBttsYes"></div>
-    </div>
-    <div class="outcome-card" id="cardBttsNo">
-      <div class="out-label">YOX ❌</div>
-      <div class="out-pct" id="pctBttsNo">—</div>
-      <div class="out-badge" id="bdgBttsNo"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secBtts')">
+    🎯 Hər İki Komanda Qol Atar <span class="chevron" id="chev-secBtts">▶</span>
+  </div>
+  <div id="secBtts" class="section-content">
+    <div class="outcome-grid">
+      <div class="outcome-card" id="cardBttsYes">
+        <div class="out-label">HƏR İKİSİ ATAR ✅</div>
+        <div class="out-pct" id="pctBttsYes">—</div>
+        <div class="out-badge" id="bdgBttsYes"></div>
+      </div>
+      <div class="outcome-card" id="cardBttsNo">
+        <div class="out-label">YOX ❌</div>
+        <div class="out-pct" id="pctBttsNo">—</div>
+        <div class="out-badge" id="bdgBttsNo"></div>
+      </div>
     </div>
   </div>
 
   <!-- İLK YARI -->
-  <div class="section-title">⏱ İlk Yarı Analizi</div>
-  <div class="half-grid">
-    <div class="half-card">
-      <div class="half-title">1X2 (İlk Yarı)</div>
-      <div class="half-rows" id="fh1x2"></div>
-    </div>
-    <div class="half-card">
-      <div class="half-title">Qollar (İlk Yarı)</div>
-      <div class="half-rows" id="fhOu"></div>
-    </div>
-    <div class="half-card">
-      <div class="half-title">BTTS (İlk Yarı)</div>
-      <div class="half-rows" id="fhBtts"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secFH')">
+    ⏱ İlk Yarı Analizi <span class="chevron" id="chev-secFH">▶</span>
+  </div>
+  <div id="secFH" class="section-content">
+    <div class="half-grid">
+      <div class="half-card">
+        <div class="half-title">1X2 (İlk Yarı)</div>
+        <div class="half-rows" id="fh1x2"></div>
+      </div>
+      <div class="half-card">
+        <div class="half-title">Qollar (İlk Yarı)</div>
+        <div class="half-rows" id="fhOu"></div>
+      </div>
+      <div class="half-card">
+        <div class="half-title">BTTS (İlk Yarı)</div>
+        <div class="half-rows" id="fhBtts"></div>
+      </div>
     </div>
   </div>
 
   <!-- KORNERLƏR -->
-  <div class="section-title">🚩 Korner Bazarı</div>
-  <div class="market-grid" id="cornerGrid"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secCorners')">
+    🚩 Korner Bazarı <span class="chevron" id="chev-secCorners">▶</span>
+  </div>
+  <div id="secCorners" class="section-content">
+    <div class="market-grid" id="cornerGrid"></div>
+  </div>
 
   <!-- DİGƏR BAZARLAR -->
-  <div class="section-title">📊 Digər Bazarlar</div>
-  <div class="other-grid" id="otherGrid"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secOther')">
+    📊 Digər Bazarlar <span class="chevron" id="chev-secOther">▶</span>
+  </div>
+  <div id="secOther" class="section-content">
+    <div class="other-grid" id="otherGrid"></div>
+  </div>
 
   <!-- DƏQİQ HESAB -->
-  <div class="section-title">🎲 Ən Çox Gözlənilən Hesablar</div>
-  <div class="scores-grid" id="scoresGrid"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secScores')">
+    🎲 Ən Çox Gözlənilən Hesablar <span class="chevron" id="chev-secScores">▶</span>
+  </div>
+  <div id="secScores" class="section-content">
+    <div class="scores-grid" id="scoresGrid"></div>
+  </div>
 
   <!-- M2 ARAŞDIRMA -->
-  <div class="section-title">🔍 M2 Araşdırma Nəticələri</div>
-  <div class="research-grid" id="researchGrid"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secResearch')">
+    🔍 M2 Araşdırma Nəticələri <span class="chevron" id="chev-secResearch">▶</span>
+  </div>
+  <div id="secResearch" class="section-content">
+    <div class="research-grid" id="researchGrid"></div>
+  </div>
 
   <!-- M3 TAKTİKİ -->
-  <div class="section-title">🧠 M3 Taktiki Analiz</div>
-  <div class="tactical-box" id="tacticalBox"></div>
+  <div class="section-title collapsible" onclick="toggleSection('secTactical')">
+    🧠 M3 Taktiki Analiz <span class="chevron" id="chev-secTactical">▶</span>
+  </div>
+  <div id="secTactical" class="section-content">
+    <div class="tactical-box" id="tacticalBox"></div>
+  </div>
 
   <!-- FİNAL QƏRAR -->
-  <div class="section-title">⚖️ Final Qərar</div>
-  <div class="final-box">
-    <div class="conf-row">
-      <span class="conf-label">Sistem Güvəni</span>
-      <div class="conf-bar"><div class="conf-fill" id="fillSistem"></div></div>
-      <span class="conf-val" id="lblSistem">0/10</span>
+  <div class="section-title collapsible" onclick="toggleSection('secFinal')">
+    ⚖️ Final Qərar <span class="chevron" id="chev-secFinal">▼</span>
+  </div>
+  <div id="secFinal" class="section-content open">
+    <div class="final-box">
+      <div class="conf-row">
+        <span class="conf-label">Sistem Güvəni</span>
+        <div class="conf-bar"><div class="conf-fill" id="fillSistem"></div></div>
+        <span class="conf-val" id="lblSistem">0/10</span>
+      </div>
+      <div id="finalVerdict" class="verdict"></div>
+      <div id="finalReason" class="final-reason"></div>
+      <div id="finalDominant" class="final-dominant"></div>
     </div>
-    <div id="finalVerdict" class="verdict"></div>
-    <div id="finalReason" class="final-reason"></div>
-    <div id="finalDominant" class="final-dominant"></div>
   </div>
 
 </div>

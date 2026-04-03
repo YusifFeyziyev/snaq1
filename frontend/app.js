@@ -1,5 +1,10 @@
 const BACKEND_URL = "https://snaq1.onrender.com";
 
+// ── QLobal vəziyyət ───────────────────────
+let analysisController = null;
+let _m1Data = null, _m2Data = null, _m3Data = null, _m4Data = null;
+let _team1 = '—', _team2 = '—';
+
 // ── KÖMƏKÇI ──────────────────────────────
 function pct(val) {
   let v = parseFloat(val);
@@ -27,6 +32,26 @@ function barColor(v10) {
   return "#ef4444";
 }
 
+// ── BÖLMƏ AÇ/BAĞLA ───────────────────────
+function toggleSection(id) {
+  const content = document.getElementById(id);
+  const chevron = document.getElementById('chev-' + id);
+  if (!content) return;
+  const isOpen = content.classList.contains('open');
+  content.classList.toggle('open', !isOpen);
+  if (chevron) chevron.textContent = isOpen ? '▶' : '▼';
+}
+
+// ── KART RƏNGİ (ehtimala görə) ───────────
+function setCardColor(cardId, probability) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  card.classList.remove('card-hot', 'card-warm', 'card-cold');
+  if (probability >= 65) card.classList.add('card-hot');
+  else if (probability >= 48) card.classList.add('card-warm');
+  else card.classList.add('card-cold');
+}
+
 // ── MODUL KART ────────────────────────────
 function fillMod(id, score01) {
   const s = Math.min(10, parseFloat(score01 || 0) * 10);
@@ -52,6 +77,7 @@ function fill1x2(data) {
     const bEl = document.getElementById(`bdg${key}`);
     if (pEl) { pEl.textContent = `${p}%`; pEl.className = `out-pct ${colorClass(p)}`; }
     if (bEl) bEl.textContent = badge(p);
+    setCardColor(`card${key}`, p);
   });
 }
 
@@ -98,6 +124,7 @@ function fillBtts(data) {
     const bEl = document.getElementById(`bdg${key}`);
     if (pEl) { pEl.textContent = `${p}%`; pEl.className = `out-pct ${colorClass(p)}`; }
     if (bEl) bEl.textContent = badge(p);
+    setCardColor(`card${key}`, p);
   });
 }
 
@@ -378,9 +405,333 @@ function fillFinal(m4) {
   if (dom && m4.dominant_modul) dom.textContent = `Dominant modul: ${m4.dominant_modul}`;
 }
 
+// ── PERFORMANS QRAFİKİ ────────────────────
+function drawPerformanceChart(m1, team1, team2) {
+  const canvas = document.getElementById('performanceChart');
+  if (!canvas || !m1) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth || 800;
+  const H = 260;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.height = H + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const x2   = m1['1x2']         || {};
+  const btts  = m1.btts           || {};
+  const ou    = m1.over_under     || {};
+  const fh    = (m1.first_half || {})['1x2'] || {};
+
+  const metrics = [
+    { label: 'Qaliblıq %',  home: pct(x2.home_win),          away: pct(x2.away_win)          },
+    { label: 'BTTS Hə',     home: pct(btts.yes),              away: pct(btts.no)               },
+    { label: 'Over 2.5',    home: pct((ou['2.5']||{}).over),  away: pct((ou['2.5']||{}).under) },
+    { label: 'Over 1.5',    home: pct((ou['1.5']||{}).over),  away: pct((ou['1.5']||{}).under) },
+    { label: 'İY Qaliblıq', home: pct(fh.home_win),           away: pct(fh.away_win)           },
+  ];
+
+  const PAD   = { top: 14, right: 24, bottom: 30, left: 90 };
+  const cW    = W - PAD.left - PAD.right;
+  const cH    = H - PAD.top  - PAD.bottom;
+  const rows  = metrics.length;
+  const rowH  = cH / rows;
+  const barH  = Math.min(14, rowH * 0.38);
+  const gap   = 3;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid lines
+  [25, 50, 75, 100].forEach(v => {
+    const x = PAD.left + (v / 100) * cW;
+    ctx.beginPath();
+    ctx.moveTo(x, PAD.top);
+    ctx.lineTo(x, PAD.top + cH);
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(100,116,139,0.6)';
+    ctx.font = `10px Segoe UI, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText(v + '%', x, PAD.top + cH + 16);
+  });
+
+  metrics.forEach((m, i) => {
+    const midY = PAD.top + i * rowH + rowH / 2;
+    const y1   = midY - barH - gap / 2;
+    const y2   = midY + gap / 2;
+
+    // Label
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `11px Segoe UI, sans-serif`;
+    ctx.textAlign = 'right';
+    ctx.fillText(m.label, PAD.left - 8, midY + 4);
+
+    // Home bar (blue)
+    const hw = (m.home / 100) * cW;
+    ctx.fillStyle = '#3b82f6';
+    drawRoundRect(ctx, PAD.left, y1, Math.max(hw, 2), barH, 3);
+
+    // Home label inside/outside
+    if (m.home > 10) {
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold 9px Segoe UI, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(m.home + '%', PAD.left + hw - 26, y1 + barH - 2);
+    }
+
+    // Away bar (red/orange)
+    const aw = (m.away / 100) * cW;
+    ctx.fillStyle = '#f59e0b';
+    drawRoundRect(ctx, PAD.left, y2, Math.max(aw, 2), barH, 3);
+
+    if (m.away > 10) {
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold 9px Segoe UI, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(m.away + '%', PAD.left + aw - 26, y2 + barH - 2);
+    }
+  });
+
+  // Legend update
+  const leg = document.getElementById('chartLegend');
+  if (leg) {
+    leg.innerHTML = `
+      <span><span class="legend-dot" style="background:#3b82f6"></span>${team1 || 'Ev komanda'}</span>
+      <span><span class="legend-dot" style="background:#f59e0b"></span>${team2 || 'Qonaq komanda'}</span>
+    `;
+  }
+}
+
+function drawRoundRect(ctx, x, y, w, h, r) {
+  if (w < r * 2) r = w / 2;
+  if (h < r * 2) r = h / 2;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ── MODAL: M2/M3/M4 DETAYLI MƏTİN ────────
+function openModuleDetail(mod) {
+  const overlay = document.getElementById('moduleModal');
+  const content = document.getElementById('modalContent');
+  if (!overlay || !content) return;
+
+  let html = '';
+  if      (mod === 'M2' && _m2Data) html = buildM2Modal(_m2Data);
+  else if (mod === 'M3' && _m3Data) html = buildM3Modal(_m3Data);
+  else if (mod === 'M4' && _m4Data) html = buildM4Modal(_m4Data);
+  else {
+    html = `<div class="modal-title">⚠️ Məlumat yoxdur</div>
+            <p style="color:var(--muted);font-size:13px;margin-top:8px">
+              Əvvəlcə analizi başladın.</p>`;
+  }
+
+  content.innerHTML = html;
+  overlay.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal(e) {
+  if (e && e.target.id !== 'moduleModal') return;
+  document.getElementById('moduleModal').classList.remove('active');
+  document.body.style.overflow = '';
+}
+
+function buildM2Modal(m2) {
+  const guven = ((parseFloat(m2.m2_guveni || 0)) * 10).toFixed(1);
+
+  const sections = [
+    {
+      title: "👨‍⚖️ Hakim",
+      key: "referee",
+      fields: [
+        ["Ad", "name"],
+        ["Sarı kart / oyun", "yellow_avg"],
+        ["Qırmızı kart / oyun", "red_avg"],
+        ["Foul həssaslığı", "foul_sensitivity"]
+      ]
+    },
+    {
+      title: "🤕 Zədə / Yoxlar",
+      key: "injuries",
+      fields: [
+        ["Ev yoxları", d => (d.home_absent || []).join(", ") || "Yoxdur"],
+        ["Qonaq yoxları", d => (d.away_absent || []).join(", ") || "Yoxdur"],
+        ["Əsas oyunçu", d => (d.key_players_missing || []).join(", ") || "Yoxdur"]
+      ]
+    },
+    {
+      title: "💪 Motivasiya",
+      key: "motivation",
+      fields: [["Ev", "home_motivation"], ["Qonaq", "away_motivation"], ["Səbəb", "reason"]]
+    },
+    {
+      title: "😴 Yorğunluq",
+      key: "fatigue",
+      fields: [
+        ["Ev yorğunluğu", "home_fatigue"],
+        ["Qonaq yorğunluğu", "away_fatigue"],
+        ["Ev – son oyundan gün", "days_since_last_match_home"],
+        ["Qonaq – son oyundan gün", "days_since_last_match_away"]
+      ]
+    },
+    {
+      title: "🌤 Hava",
+      key: "weather",
+      fields: [
+        ["Şərait", "condition"],
+        ["Temperatur", d => d.temperature ? `${d.temperature}°C` : "—"],
+        ["Külək", "wind"],
+        ["Oyuna təsir", "impact"]
+      ]
+    },
+    {
+      title: "📋 Gözlənilən Heyət",
+      key: "lineup",
+      fields: [
+        ["Ev sxemi", "home_expected"],
+        ["Qonaq sxemi", "away_expected"],
+        ["Ev rotasiyası", "home_rotation"],
+        ["Qonaq rotasiyası", "away_rotation"]
+      ]
+    }
+  ];
+
+  let html = `<div class="modal-title">🔍 M2 Araşdırma Analizi</div>
+    <div class="modal-subtitle">Güvən Səviyyəsi: ${guven}/10</div>`;
+
+  sections.forEach(({ title, key, fields }) => {
+    const d = m2[key];
+    if (!d) return;
+    const rows = fields.map(([label, getter]) => {
+      let val = typeof getter === 'function' ? getter(d) : (d[getter] ?? '—');
+      if (!val || val === '') val = '—';
+      return `<div class="modal-row">
+        <span class="modal-key">${label}</span>
+        <span class="modal-val">${val}</span>
+      </div>`;
+    }).join('');
+    html += `<div class="modal-section">
+      <div class="modal-section-title">${title}</div>
+      ${rows}
+    </div>`;
+  });
+
+  return html;
+}
+
+function buildM3Modal(m3) {
+  const guven = ((parseFloat(m3.m3_guveni || 0)) * 10).toFixed(1);
+  const c     = m3.carpanlar || {};
+  const flags = m3.flags || [];
+  const crit  = m3.critical_factors || [];
+
+  let html = `<div class="modal-title">🧠 M3 Taktiki Analiz</div>
+    <div class="modal-subtitle">Güvən Səviyyəsi: ${guven}/10</div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">🎯 Ümumi Taktika</div>
+      <div class="modal-row"><span class="modal-key">Oyun tempi</span><span class="modal-val">${m3.tempo || '—'}</span></div>
+      <div class="modal-row"><span class="modal-key">Ev taktikası</span><span class="modal-val">${m3.taktika_ev || '—'}</span></div>
+      <div class="modal-row"><span class="modal-key">Qonaq taktikası</span><span class="modal-val">${m3.taktika_qonaq || '—'}</span></div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">⚙️ Çarpan Dəyərləri</div>
+      <div class="modal-row"><span class="modal-key">Ev motivasiya çarpanı</span><span class="modal-val">${c.motivasiya_ev || '—'}</span></div>
+      <div class="modal-row"><span class="modal-key">Qonaq motivasiya çarpanı</span><span class="modal-val">${c.motivasiya_qonaq || '—'}</span></div>
+      <div class="modal-row"><span class="modal-key">Ev yorğunluq çarpanı</span><span class="modal-val">${c.yorğunluq_ev || '—'}</span></div>
+      <div class="modal-row"><span class="modal-key">Qonaq yorğunluq çarpanı</span><span class="modal-val">${c.yorğunluq_qonaq || '—'}</span></div>
+      <div class="modal-row"><span class="modal-key">Hakim təsiri çarpanı</span><span class="modal-val">${c.hakim_təsiri || '—'}</span></div>
+    </div>`;
+
+  if (flags.length) {
+    html += `<div class="modal-section">
+      <div class="modal-section-title">🚩 Flaglar</div>
+      <div class="modal-flag-row">
+        ${flags.map(f => `<span class="modal-flag">${f}</span>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (crit.length) {
+    html += `<div class="modal-section">
+      <div class="modal-section-title">⚠️ Kritik Faktorlar</div>
+      <div class="modal-flag-row">
+        ${crit.map(f => `<span class="modal-flag yellow">${f}</span>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  return html;
+}
+
+function buildM4Modal(m4) {
+  const sg    = parseFloat(m4.sistem_guveni || 0);
+  const qerar = (m4["qərar"] || m4.qerar || '').toUpperCase();
+  const isPlay = qerar.includes("OYNARIM") && !qerar.includes("OYNAMARAM");
+  const sebeb  = m4["səbəb"] || m4.sebeb || '—';
+
+  return `<div class="modal-title">⚖️ M4 Final Qərar</div>
+    <div class="modal-subtitle">Sistem Güvəni: ${sg.toFixed(1)}/10</div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">🏁 Qərar</div>
+      <div style="text-align:center;font-size:22px;font-weight:900;
+                  padding:16px;border-radius:10px;margin:8px 0;
+                  ${isPlay
+                    ? 'background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.4)'
+                    : 'background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.4)'}">
+        ${isPlay ? '🏆 OYNARIM ✅' : '🚫 OYNAMARAM ❌'}
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">📝 Əsas Səbəb</div>
+      <p style="font-size:13px;color:#e2e8f0;line-height:1.7;padding:6px 0">${sebeb}</p>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">📊 Sistem Məlumatları</div>
+      <div class="modal-row"><span class="modal-key">Sistem güvəni</span><span class="modal-val">${sg.toFixed(1)} / 10</span></div>
+      <div class="modal-row"><span class="modal-key">Dominant modul</span><span class="modal-val">${m4.dominant_modul || '—'}</span></div>
+      <div class="modal-row"><span class="modal-key">Final qərar</span><span class="modal-val">${m4["qərar"] || m4.qerar || '—'}</span></div>
+    </div>`;
+}
+
+// ── DÜYMƏ RESET ──────────────────────────
+function resetAnalysisBtn() {
+  const btn     = document.getElementById("analyzeBtn");
+  const btnText = document.getElementById("btnText");
+  const spinner = document.getElementById("btnSpinner");
+  btn.classList.remove('btn-stop');
+  btnText.textContent = "Analiz Et";
+  spinner.classList.add("hidden");
+}
+
 // ── ANA FUNKSİYA ─────────────────────────
 async function startAnalysis() {
-  const text = document.getElementById("statsInput").value.trim();
+  // Analiz gedərkən düyməyə basılarsa → dayandır
+  if (analysisController) {
+    analysisController.abort();
+    analysisController = null;
+    resetAnalysisBtn();
+    return;
+  }
+
+  const text     = document.getElementById("statsInput").value.trim();
   const errorBox = document.getElementById("errorBox");
   const resultPanel = document.getElementById("resultPanel");
 
@@ -393,19 +744,21 @@ async function startAnalysis() {
   errorBox.classList.add("hidden");
   resultPanel.classList.add("hidden");
 
-  const btn = document.getElementById("analyzeBtn");
+  const btn     = document.getElementById("analyzeBtn");
   const btnText = document.getElementById("btnText");
   const spinner = document.getElementById("btnSpinner");
 
-  btn.disabled = true;
-  btnText.textContent = "Analiz edilir...";
+  analysisController = new AbortController();
+  btn.classList.add('btn-stop');
+  btnText.textContent = "Analizi Dayandır";
   spinner.classList.remove("hidden");
 
   try {
     const resp = await fetch(`${BACKEND_URL}/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stats_text: text.slice(0, 6000) })
+      body: JSON.stringify({ stats_text: text.slice(0, 6000) }),
+      signal: analysisController.signal
     });
 
     const res = await resp.json();
@@ -413,18 +766,26 @@ async function startAnalysis() {
 
     const { parser, m1, m2, m3, m4 } = res;
 
+    // Qlobal məlumatları saxla (modal üçün)
+    _m1Data = m1;
+    _m2Data = m2;
+    _m3Data = m3;
+    _m4Data = m4;
+
     // Oyun başlığı
-    document.getElementById("team1Name").textContent = parser?.ev_sahibi || m1?.team1 || "Ev";
-    document.getElementById("team2Name").textContent = parser?.qonaq     || m1?.team2 || "Qonaq";
+    _team1 = parser?.ev_sahibi || m1?.team1 || "Ev";
+    _team2 = parser?.qonaq     || m1?.team2 || "Qonaq";
+    document.getElementById("team1Name").textContent = _team1;
+    document.getElementById("team2Name").textContent = _team2;
     document.getElementById("leagueTag").textContent = parser?.lig || "Liqa";
 
-    // Modul kartları (hamısı 0-1 arası)
+    // Modul kartları
     fillMod("M1", m1?.m1_confidence);
     fillMod("M2", m2?.m2_guveni);
     fillMod("M3", m3?.m3_guveni);
     fillMod("M4", (m4?.sistem_guveni || 0) / 10);
 
-    // Bazarlar (M1-dən)
+    // Bazarlar
     fill1x2(m1?.["1x2"] || {});
     fillOU(m1?.over_under);
     fillBtts(m1?.btts || {});
@@ -441,15 +802,20 @@ async function startAnalysis() {
     fillFinal(m4 || {});
 
     resultPanel.classList.remove("hidden");
-    resultPanel.scrollIntoView({ behavior: "smooth" });
+
+    // Qrafik üçün kiçik gecikdirmə (layout tamamlansın)
+    setTimeout(() => {
+      drawPerformanceChart(_m1Data, _team1, _team2);
+      resultPanel.scrollIntoView({ behavior: "smooth" });
+    }, 60);
 
   } catch (err) {
+    if (err.name === 'AbortError') return; // istifadəçi dayandırdı
     errorBox.textContent = `Xəta: ${err.message}`;
     errorBox.classList.remove("hidden");
     console.error(err);
   } finally {
-    btn.disabled = false;
-    btnText.textContent = "Analiz Et";
-    spinner.classList.add("hidden");
+    analysisController = null;
+    resetAnalysisBtn();
   }
 }
