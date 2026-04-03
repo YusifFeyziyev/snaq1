@@ -3,11 +3,13 @@ import json
 import re
 import os
 import sys
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 from typing import Dict, Any, Optional
 
 # Config-dən açarı almaq üçün path-i tənzimlə
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config import GROQ_KEY_PARSER, MODEL_PARSER
+from config import GROQ_KEYS_PARSER, MODEL_PARSER
 
 try:
     from groq import Groq
@@ -19,10 +21,14 @@ class SoccerStatsParser:
     def __init__(self):
         if Groq is None:
             raise ImportError("Groq modulu yuklenmeyib. 'pip install groq' edin.")
-        if not GROQ_KEY_PARSER:
-            raise ValueError("GROQ_KEY_PARSER env-de tapilmadi.")
-        self.client = Groq(api_key=GROQ_KEY_PARSER)
+        
+        if not GROQ_KEYS_PARSER:
+            raise ValueError("Heç bir GROQ_KEY_PARSER_1, GROQ_KEY_PARSER_2 və s. tapılmadı.")
+        
+        self.keys = GROQ_KEYS_PARSER
         self.model = MODEL_PARSER
+        self.current_key_index = 0
+        self.client = self._create_client()
 
     def _clean_json(self, text: str) -> str:
         """Markdown bloklarını və lazımsız hissələri təmizləyir."""
@@ -54,6 +60,18 @@ class SoccerStatsParser:
                 raise ValueError(f"JSON parse xətası: {e}\nMətn: {json_str[:200]}")
         else:
             raise ValueError("JSON obyekti tapilmadi.")
+        
+    def _create_client(self):
+        """Cari key ilə Groq client yaradır."""
+        key = self.keys[self.current_key_index]
+        return Groq(api_key=key)
+
+    def _rotate_key(self):
+        """Növbəti key-ə keçir (rate limit və ya xəta olduqda)."""
+        self.current_key_index = (self.current_key_index + 1) % len(self.keys)
+        print(f"Parser: Key dəyişdirildi → {self.current_key_index + 1}-ci key istifadə olunur")
+        self.client = self._create_client()    
+
 
     def _build_prompt(self, raw_text: str) -> str:
         """Groq modelinə göndəriləcək promptu qurur."""
@@ -100,9 +118,7 @@ Tələb olunan JSON strukturu (boşluqlar olmadan, dəyərlər mümkün qədər 
 }}
 
 Mətn:
-\"\"\"
-{raw_text}
-\"\"\"
+\"\"\"{raw_text}\"\"\"
 
 Yalnız JSON obyektini qaytar, başqa heç nə yazma."""
         return prompt
@@ -128,9 +144,16 @@ Yalnız JSON obyektini qaytar, başqa heç nə yazma."""
             # JSON-u təmizlə və parse et
             result = self._extract_json(content)
             return result
+
         except Exception as e:
-            # Xəta baş verərsə, boş JSON qaytar və ya yenidən cəhd et
-            raise RuntimeError(f"Parser xətası: {str(e)}")
+            error_str = str(e).lower()
+            if "429" in error_str or "rate limit" in error_str or "quota" in error_str:
+                print("Rate limit aşkarlandı, key dəyişdirilir...")
+                self._rotate_key()
+                # Yenidən cəhd et
+                return self.parse(raw_text)
+            else:
+                raise RuntimeError(f"Parser xətası: {str(e)}")
 
 # Modul funksiyası (xarici çağırış üçün)
 def parse_soccer_stats(raw_text: str) -> Dict[str, Any]:

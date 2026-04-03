@@ -4,7 +4,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ====================== GROQ API AÇARLARI ======================
-GROQ_KEY_PARSER = os.getenv("GROQ_KEY_PARSER")
+# Parser üçün bir neçə Groq key-i (fallback ilə)
+GROQ_KEYS_PARSER = [
+    os.getenv("GROQ_KEY_PARSER_1"),
+    os.getenv("GROQ_KEY_PARSER_2"),
+    os.getenv("GROQ_KEY_PARSER_3"),
+]
+# Boş olan key-ləri filter et
+GROQ_KEYS_PARSER = [key for key in GROQ_KEYS_PARSER if key]
+
+
 GROQ_KEY_M3     = os.getenv("GROQ_KEY_M3")
 GROQ_KEY_M4     = os.getenv("GROQ_KEY_M4")
 
