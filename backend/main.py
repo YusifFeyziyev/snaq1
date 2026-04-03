@@ -1,36 +1,24 @@
-# backend/main.py
 import os
 import sys
+import logging
 import importlib
 import threading
-import logging
 import traceback
 from datetime import datetime
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# ─────────────────────────────────────────────
-# LOGGING
-# ─────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────
-# PATH
-# ─────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# ─────────────────────────────────────────────
-# MODULLAR
-# "parser" Python built-in moduludur!
-# Bu səbəbdən importlib istifadə edirik.
-# ─────────────────────────────────────────────
 parse_soccer_stats = None
 run_m1 = None
 run_m2 = None
@@ -68,16 +56,51 @@ try:
 except Exception as e:
     logger.error(f"✗ m4_decision modulu tapılmadı: {e}")
 
-# ─────────────────────────────────────────────
-# FLASK
-# ─────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 
 # ─────────────────────────────────────────────
-# KÖMƏKÇİ: M1 + M2 paralel
+# ✅ DÜZƏLİŞ: Parser çıxışını M2/M3 formatına çevir
 # ─────────────────────────────────────────────
+def normalize_parsed(parsed: dict) -> dict:
+    """
+    Parser ev_sahibi/qonaq qaytarır.
+    M2 və M3 team1/team2 gözləyir.
+    Bu funksiya hər iki formatı dəstəkləyir.
+    """
+    normalized = dict(parsed)
+
+    # team1 yoxdursa ev_sahibi-dən al
+    if not normalized.get("team1"):
+        normalized["team1"] = parsed.get("ev_sahibi", "Unknown")
+
+    # team2 yoxdursa qonaq-dan al
+    if not normalized.get("team2"):
+        normalized["team2"] = parsed.get("qonaq", "Unknown")
+
+    # team1_stats yoxdursa parser statistikasından qur
+    if not normalized.get("team1_stats"):
+        normalized["team1_stats"] = {
+            "avg_goals_scored":   parsed.get("ortalama_qol_ev", 1.5),
+            "avg_goals_conceded": parsed.get("ev_buraxilan_qol_son_5", 1.2),
+            "attack_strength":    parsed.get("ortalama_sot_ev", 1.0),
+            "defense_strength":   parsed.get("ortalama_sot_qonaq", 1.0),
+        }
+
+    # team2_stats yoxdursa parser statistikasından qur
+    if not normalized.get("team2_stats"):
+        normalized["team2_stats"] = {
+            "avg_goals_scored":   parsed.get("ortalama_qol_qonaq", 1.5),
+            "avg_goals_conceded": parsed.get("qonaq_buraxilan_qol_son_5", 1.2),
+            "attack_strength":    parsed.get("ortalama_sot_qonaq", 1.0),
+            "defense_strength":   parsed.get("ortalama_sot_ev", 1.0),
+        }
+
+    logger.info(f"Komandalar: {normalized['team1']} vs {normalized['team2']}")
+    return normalized
+
+
 def run_m1_m2_parallel(parsed_json: dict) -> tuple:
     m1_result, m2_result = None, None
     m1_error,  m2_error  = None, None
@@ -119,9 +142,6 @@ def run_m1_m2_parallel(parsed_json: dict) -> tuple:
     return m1_result, m2_result
 
 
-# ─────────────────────────────────────────────
-# ENDPOINT: /health
-# ─────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health_check():
     modules = {
@@ -139,9 +159,6 @@ def health_check():
     }), 200 if all_ok else 503
 
 
-# ─────────────────────────────────────────────
-# ENDPOINT: /analyze
-# ─────────────────────────────────────────────
 @app.route("/analyze", methods=["POST"])
 def analyze():
     if not request.is_json:
@@ -166,6 +183,9 @@ def analyze():
             raise RuntimeError("Parser modulu işləmir")
         parsed = parse_soccer_stats(stats_text)
         logger.info("Parser tamamlandı")
+
+        # ✅ DÜZƏLİŞ: team1/team2 + team_stats əlavə et
+        parsed = normalize_parsed(parsed)
 
         # 2. M1 + M2 (paralel)
         m1_result, m2_result = run_m1_m2_parallel(parsed)
@@ -202,9 +222,6 @@ def analyze():
         }), 500
 
 
-# ─────────────────────────────────────────────
-# LOCAL İŞLƏTMƏ
-# ─────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
