@@ -3,6 +3,8 @@ import re
 import json
 import time
 import requests
+from google import genai
+from google.genai import types
 from typing import Dict, Any, List, Optional
 
 try:
@@ -19,7 +21,7 @@ SERPER_API_URL = "https://google.serper.dev/search"
 
 def validate_api_keys() -> Dict[str, bool]:
     return {
-        "groq":   bool(GROQ_KEY_M2),
+        "gemini":   bool(GEMINI_API_KEY),
         "tavily": bool(TAVILY_KEY),
         "serper": bool(SERPER_KEY)
     }
@@ -255,50 +257,49 @@ QAYDALAR (MÜTLƏQ):
     }
 }"""
 
-def analyze_with_groq(team1: str, team2: str, search_text: str) -> Dict:
-    if not GROQ_KEY_M2:
-        raise ValueError("GROQ_KEY_M2 environment-da tapılmadı.")
+# ====================== GEMINI ANALİZ FUNKSIYASI ======================
+def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY tapılmadı.")
 
-    user_prompt = (
-        f"Komandalar: {team1} vs {team2}\n\n"
-        f"Axtarış nəticələri:\n{search_text[:7000]}\n\n"
-        "Yuxarıdakı axtarış nəticələrindən tapılan REAL məlumatları JSON strukturuna daxil et. "
-        "Tapılmayan məlumatlar üçün mütləq status=tapılmadı, confidence=0.0 istifadə et."
-    )
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
-    headers = {
-        "Authorization": f"Bearer {GROQ_KEY_M2}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": MODEL_M2,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": user_prompt}
-        ],
-        "temperature": 0.0,
-        "max_tokens": 2500
-    }
+    user_prompt = f"""
+Komandalar: {team1} vs {team2}
+
+Axtarış nəticələri:
+{search_text[:8000]}
+
+Yuxarıdakı məlumatlara əsasən aşağıdakı JSON strukturunu doldur.
+Yalnız real tapılan məlumatları yaz. Tapılmayanlar üçün status="tapılmadı", confidence=0.0 qoy.
+Heç bir əlavə mətn yazma, yalnız JSON qaytar.
+"""
 
     try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+        response = client.models.generate_content(
+            model=MODEL_M2,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                max_output_tokens=2500,
+                response_mime_type="application/json"
+            )
+        )
+
+        content = response.text.strip()
         return safe_json_parse(content)
-    except requests.exceptions.Timeout:
-        raise Exception("Groq API timeout (60 saniyə).")
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Groq API xətası: {str(e)}")
+
     except Exception as e:
-        raise Exception(f"Gözlənilməz xəta: {str(e)}")
+        print(f"Gemini xətası: {e}")
+        raise Exception(f"Gemini API xətası: {str(e)}")
 
 def run_m2(parser_json: Dict) -> Dict:
     team1 = parser_json.get("team1", "Unknown")
     team2 = parser_json.get("team2", "Unknown")
 
     keys = validate_api_keys()
-    if not keys["groq"]:
-        return _empty_result(error="GROQ_KEY_M2 tapılmadı.")
+    if not GEMINI_API_KEY:
+        return _empty_result(error="GEMINI_API_KEY tapılmadı.")
     if not keys["tavily"] and not keys["serper"]:
         return _empty_result(error="Nə TAVILY_KEY, nə SERPER_KEY tapılmadı.")
 
