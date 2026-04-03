@@ -290,28 +290,51 @@ function fillResearch(m2) {
 function fillTactical(m3) {
   const box = document.getElementById("tacticalBox");
   if (!box || !m3) return;
+
   const c = m3.carpanlar || {};
   const flags = m3.flags || [];
   const critical = m3.critical_factors || [];
+
+  // Təhlükəsiz çıxarış
+  const tempoVal     = m3.tempo_value     || (m3.tempo && m3.tempo.value)     || m3.tempo     || "—";
+  const taktikaEv    = m3.taktika_ev_value|| (m3.taktika_ev && m3.taktika_ev.value) || m3.taktika_ev || "—";
+  const taktikaQonaq = m3.taktika_qonaq_value || (m3.taktika_qonaq && m3.taktika_qonaq.value) || m3.taktika_qonaq || "—";
+
+  // Flag və Kritik hissələri ayrıca yığırıq (copy-paste üçün ən təhlükəsiz)
+  let extra = "";
+
+  if (flags.length > 0) {
+    const flagHTML = flags.map(f => `<span class="tac-flag">${f}</span>`).join("");
+    extra += `
+      <div class="tac-item" style="grid-column:1/-1">
+        <span class="tac-key">Flaglar</span>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:4px">
+          ${flagHTML}
+        </div>
+      </div>`;
+  }
+
+  if (critical.length > 0) {
+    const critHTML = critical.map(f => `<span class="tac-flag" style="border-color:rgba(245,158,11,.3);color:var(--yellow)">${f}</span>`).join("");
+    extra += `
+      <div class="tac-item" style="grid-column:1/-1">
+        <span class="tac-key">Kritik Faktorlar</span>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:4px">
+          ${critHTML}
+        </div>
+      </div>`;
+  }
+
   box.innerHTML = `
-    <div class="tac-item"><span class="tac-key">Temp</span><span class="tac-val">${m3.tempo || "—"}</span></div>
-    <div class="tac-item"><span class="tac-key">Ev taktikası</span><span class="tac-val">${m3.taktika_ev || "—"}</span></div>
-    <div class="tac-item"><span class="tac-key">Qonaq taktikası</span><span class="tac-val">${m3.taktika_qonaq || "—"}</span></div>
+    <div class="tac-item"><span class="tac-key">Oyun tempi</span><span class="tac-val">${tempoVal}</span></div>
+    <div class="tac-item"><span class="tac-key">Ev taktikası</span><span class="tac-val">${taktikaEv}</span></div>
+    <div class="tac-item"><span class="tac-key">Qonaq taktikası</span><span class="tac-val">${taktikaQonaq}</span></div>
     <div class="tac-item"><span class="tac-key">Ev motivasiya</span><span class="tac-val c-green">${c.motivasiya_ev || "—"}</span></div>
     <div class="tac-item"><span class="tac-key">Qonaq motivasiya</span><span class="tac-val c-yellow">${c.motivasiya_qonaq || "—"}</span></div>
     <div class="tac-item"><span class="tac-key">Ev yorğunluq</span><span class="tac-val">${c.yorgunluq_ev || c["yorğunluq_ev"] || "—"}</span></div>
     <div class="tac-item"><span class="tac-key">Qonaq yorğunluq</span><span class="tac-val">${c.yorgunluq_qonaq || c["yorğunluq_qonaq"] || "—"}</span></div>
     <div class="tac-item"><span class="tac-key">Hakim təsiri</span><span class="tac-val">${c.hakim_tesiri || c["hakim_təsiri"] || "—"}</span></div>
-    ${flags.length ? `<div class="tac-item" style="grid-column:1/-1">
-      <span class="tac-key">Flaglar</span>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-        ${flags.map(f=>`<span class="tac-flag">${f}</span>`).join("")}
-      </div></div>` : ""}
-    ${critical.length ? `<div class="tac-item" style="grid-column:1/-1">
-      <span class="tac-key">Kritik Faktorlar</span>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-        ${critical.map(f=>`<span class="tac-flag" style="border-color:rgba(245,158,11,.3);color:var(--yellow)">${f}</span>`).join("")}
-      </div></div>` : ""}
+    ${extra}
   `;
 }
 
@@ -756,38 +779,64 @@ function buildM2Modal(m2) {
   return html;
 }
 
+// ── M3 MODAL ─────────────────────────────
 function buildM3Modal(m3) {
-  const guven = ((parseFloat(m3.m3_guveni || 0)) * 10).toFixed(1);
-  const c    = m3.carpanlar || {};
+  if (!m3) return `<div class="modal-title">⚠️ M3 məlumatı yoxdur</div>`;
+
+  const guven = parseFloat(m3.m3_guveni || 0).toFixed(1);
+
+  const c = m3.carpanlar || {};
   const flags = m3.flags || [];
-  const crit  = m3.critical_factors || [];
-  let html = `<div class="modal-title">🧠 M3 Taktiki Analiz</div>
+  const crit = m3.critical_factors || [];
+
+  // Təhlükəsiz çıxarış (Python həm obyekt, həm _value göndərir)
+  const tempoVal     = m3.tempo_value     || (m3.tempo && m3.tempo.value)     || m3.tempo     || "—";
+  const taktikaEv    = m3.taktika_ev_value|| (m3.taktika_ev && m3.taktika_ev.value) || m3.taktika_ev || "—";
+  const taktikaQonaq = m3.taktika_qonaq_value || (m3.taktika_qonaq && m3.taktika_qonaq.value) || m3.taktika_qonaq || "—";
+
+  // Flag və Kritik hissələri ayrıca (copy-paste üçün təhlükəsiz)
+  let extra = "";
+
+  if (flags.length > 0) {
+    const flagHTML = flags.map(f => `<span class="modal-flag">${f}</span>`).join("");
+    extra += `
+      <div class="modal-section">
+        <div class="modal-section-title">🚩 Flaglar</div>
+        <div class="modal-flag-row">${flagHTML}</div>
+      </div>`;
+  }
+
+  if (crit.length > 0) {
+    const critHTML = crit.map(f => `<span class="modal-flag yellow">${f}</span>`).join("");
+    extra += `
+      <div class="modal-section">
+        <div class="modal-section-title">⚠️ Kritik Faktorlar</div>
+        <div class="modal-flag-row">${critHTML}</div>
+      </div>`;
+  }
+
+  return `
+    <div class="modal-title">🧠 M3 Taktiki Analiz</div>
     <div class="modal-subtitle">Güvən Səviyyəsi: ${guven}/10</div>
+
     <div class="modal-section">
       <div class="modal-section-title">🎯 Ümumi Taktika</div>
-      <div class="modal-row"><span class="modal-key">Oyun tempi</span><span class="modal-val">${m3.tempo || "—"}</span></div>
-      <div class="modal-row"><span class="modal-key">Ev taktikası</span><span class="modal-val">${m3.taktika_ev || "—"}</span></div>
-      <div class="modal-row"><span class="modal-key">Qonaq taktikası</span><span class="modal-val">${m3.taktika_qonaq || "—"}</span></div>
+      <div class="modal-row"><span class="modal-key">Oyun tempi</span><span class="modal-val">${tempoVal}</span></div>
+      <div class="modal-row"><span class="modal-key">Ev taktikası</span><span class="modal-val">${taktikaEv}</span></div>
+      <div class="modal-row"><span class="modal-key">Qonaq taktikası</span><span class="modal-val">${taktikaQonaq}</span></div>
     </div>
+
     <div class="modal-section">
       <div class="modal-section-title">⚙️ Çarpan Dəyərləri</div>
-      <div class="modal-row"><span class="modal-key">Ev motivasiya çarpanı</span><span class="modal-val">${c.motivasiya_ev || c["motivasiya_ev"] || "—"}</span></div>
-      <div class="modal-row"><span class="modal-key">Qonaq motivasiya çarpanı</span><span class="modal-val">${c.motivasiya_qonaq || c["motivasiya_qonaq"] || "—"}</span></div>
+      <div class="modal-row"><span class="modal-key">Ev motivasiya çarpanı</span><span class="modal-val">${c.motivasiya_ev || "—"}</span></div>
+      <div class="modal-row"><span class="modal-key">Qonaq motivasiya çarpanı</span><span class="modal-val">${c.motivasiya_qonaq || "—"}</span></div>
       <div class="modal-row"><span class="modal-key">Ev yorğunluq çarpanı</span><span class="modal-val">${c.yorgunluq_ev || c["yorğunluq_ev"] || "—"}</span></div>
       <div class="modal-row"><span class="modal-key">Qonaq yorğunluq çarpanı</span><span class="modal-val">${c.yorgunluq_qonaq || c["yorğunluq_qonaq"] || "—"}</span></div>
       <div class="modal-row"><span class="modal-key">Hakim təsiri çarpanı</span><span class="modal-val">${c.hakim_tesiri || c["hakim_təsiri"] || "—"}</span></div>
-    </div>`;
-  if (flags.length) {
-    html += `<div class="modal-section"><div class="modal-section-title">🚩 Flaglar</div>
-      <div class="modal-flag-row">${flags.map(f=>`<span class="modal-flag">${f}</span>`).join("")}</div>
-    </div>`;
-  }
-  if (crit.length) {
-    html += `<div class="modal-section"><div class="modal-section-title">⚠️ Kritik Faktorlar</div>
-      <div class="modal-flag-row">${crit.map(f=>`<span class="modal-flag yellow">${f}</span>`).join("")}</div>
-    </div>`;
-  }
-  return html;
+    </div>
+
+    ${extra}
+  `;
 }
 
 function buildM4Modal(m4) {
@@ -925,11 +974,13 @@ async function startAnalysis() {
     document.getElementById("team2Name").textContent = _team2;
     document.getElementById("leagueTag").textContent = parser?.lig || "Liqa";
 
-    // Modul kartları (M1 confidence düzəliş: m1_guveni və ya m1_confidence)
+    // ── MODUL KARTLARI (Güvən səviyyələri) ─────────────────────────────
+    // Bütün backend-lər indi 0-10 arası göndərir → hamısını /10 edirik
     const m1conf = m1?.m1_guveni || m1?.m1_confidence || 0;
-    fillMod("M1", m1conf <= 10 ? m1conf / 10 : m1conf / 100);
-    fillMod("M2", m2?.m2_guveni);
-    fillMod("M3", m3?.m3_guveni);
+    
+    fillMod("M1", m1conf <= 10 ? m1conf / 10 : m1conf / 100);   // köhnə M1 xüsusi halı saxlandı
+    fillMod("M2", (m2?.m2_guveni || 0) / 10);
+    fillMod("M3", (m3?.m3_guveni || 0) / 10);
     fillMod("M4", (m4?.sistem_guveni || 0) / 10);
 
     // Bazarlar

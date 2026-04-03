@@ -42,7 +42,7 @@ def count_real_fields(m2_data: Dict) -> int:
 # ─────────────────────────────────────────
 
 def taktika_tipi_tey(goals_scored: float, goals_conceded: float,
-                     corners: float, sot: float = None) -> str:
+                     corners: float = None) -> str:
     if goals_scored is None or goals_conceded is None:
         return "balanslı"
     if goals_scored < 0.8 and goals_conceded < 0.9:
@@ -189,15 +189,21 @@ def hesabla_flags(parser_json: Dict, m2_data: Dict, tip_ev: str, tip_qonaq: str)
 
 def hesabla_m3_guveni(m2_data: Dict, flags: List[str], carpanlar: Dict) -> float:
     real_count = count_real_fields(m2_data)
-    m2_bal     = min(3.0, real_count * 0.6)
-    ferg       = sum(abs(v - 1.0) for v in carpanlar.values())
-    signal_bal = min(4.0, ferg * 5)
-    zid_bal    = 3.0
+    m2_bal = min(4.0, real_count * 0.85)          # artırıldı
+
+    ferg = sum(abs(v - 1.0) for v in carpanlar.values())
+    signal_bal = min(5.0, ferg * 4.5)             # bir az daha həssas
+
+    zid_bal = 3.5
     if "BUS_STOP_QONAQ" in flags and "YORĞUNLUQ_EV" in flags:
-        zid_bal = 1.5
+        zid_bal = 2.0
     if len(flags) > 4:
+        zid_bal = 1.5
+    if len(flags) >= 6:
         zid_bal = 1.0
-    return round(min(10.0, m2_bal + signal_bal + zid_bal), 2)
+
+    total = m2_bal + signal_bal + zid_bal
+    return round(min(10.0, total), 1)   # 1 rəqəm kifayətdir
 
 
 # ─────────────────────────────────────────
@@ -389,6 +395,7 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
 
         guveni = hesabla_m3_guveni(m2_data, flags, carpanlar)
         result["m3_guveni"] = guveni
+        result["m3_guveni_value"] = guveni   # frontend üçün əlavə
 
         # ✅ DÜZƏLİŞ 1: [object Object] problemi
         # Əvvəl: frontend result.tempo → {"value":"orta",...} → [object Object]
