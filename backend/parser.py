@@ -1,8 +1,9 @@
+import os
+os.environ["PYTHONUTF8"] = "1"
+
 # backend/parser.py
 import json
 import re
-import os
-import sys
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from typing import Dict, Any, Optional
@@ -75,11 +76,11 @@ class SoccerStatsParser:
 
     def _build_prompt(self, raw_text: str) -> str:
         """Groq modelinə göndəriləcək promptu qurur."""
-        prompt = f"""Sən futbol statistikasını təhlil edən bir parsersən. Aşağıda SoccerStats-dan alınmış mətn verilir. Bu mətni təhlil edərək aşağıda göstərilən JSON strukturuna tam uyğun şəkildə çevir. Heç bir əlavə mətn yazma, yalnız JSON obyekti qaytar.
+        prompt = """Sən futbol statistikasını təhlil edən bir parsersən. Aşağıda SoccerStats-dan alınmış mətn verilir. Bu mətni təhlil edərək aşağıda göstərilən JSON strukturuna tam uyğun şəkildə çevir. Heç bir əlavə mətn yazma, yalnız JSON obyekti qaytar.
 
 Tələb olunan JSON strukturu (boşluqlar olmadan, dəyərlər mümkün qədər doldurulmalı, tapılmayan sahələr null və ya boş string ola bilər):
 
-{{
+{
     "ev_sahibi": "string",
     "qonaq": "string",
     "lig": "string",
@@ -115,12 +116,11 @@ Tələb olunan JSON strukturu (boşluqlar olmadan, dəyərlər mümkün qədər 
     "qonaq_qol_sayisi_son_5": 6,
     "ev_buraxilan_qol_son_5": 5,
     "qonaq_buraxilan_qol_son_5": 7
-}}
+}
 
 Mətn:
-\"\"\"{raw_text}\"\"\"
-
-Yalnız JSON obyektini qaytar, başqa heç nə yazma."""
+"""
+        prompt += f'"""{raw_text}"""\n\nYalnız JSON obyektini qaytar, başqa heç nə yazma.'
         return prompt
 
     def parse(self, raw_text: str) -> Dict[str, Any]:
