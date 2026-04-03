@@ -2,17 +2,15 @@ import math
 import json
 from typing import Dict, List, Any, Tuple
 
-# ========== SCIPY YOXLANMASI ==========
 try:
     from scipy.stats import norm
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
 
-# ========== NONE-SAFE KÖMƏKÇI ==========
+# ========== NONE-SAFE KÖMƏKÇİ ==========
 
 def safe(val, default):
-    """None və ya falsy dəyərləri default ilə əvəz edir."""
     if val is None:
         return default
     try:
@@ -22,7 +20,6 @@ def safe(val, default):
         return default
 
 def get_stat(d: Dict, key: str, default: float) -> float:
-    """Dict-dən None-safe float oxuma."""
     return safe(d.get(key), default)
 
 # ========== KÖMƏKÇİ FUNKSİYALAR ==========
@@ -51,31 +48,40 @@ def normal_over_probability(mean: float, std: float, line: float) -> float:
         return 1 - norm.cdf(line, loc=mean, scale=std)
     return poisson_over_probability(mean, line)
 
+# ✅ DÜZƏLİŞ 1: data_confidence normalize funksiyası
+# Əvvəl: API-dən 0-10 gələndə clamp(1.0) olurdu → heç dampen olmurdu
+# İndi: >1.0 gəlirsə 10-a böl, həmişə 0-1 aralığında qal
+def normalize_confidence(conf: float) -> float:
+    conf = safe(conf, 0.5)
+    if conf > 1.0:
+        conf = conf / 10.0
+    return max(0.0, min(1.0, conf))
+
 def dampen_poisson(lam: float, confidence: float, target_mean: float = 1.0) -> float:
-    confidence = max(0.0, min(1.0, confidence))
+    confidence = normalize_confidence(confidence)
     return lam * confidence + target_mean * (1 - confidence)
 
-def calculate_h2h_weight(h2h_stats: Dict) -> float:
+# ✅ DÜZƏLİŞ 2: h2h_weight ilə birlikdə match sayını da qaytarır
+# Əvvəl: yalnız weight qaytarırdı, match sayı məlum deyildi
+# İndi: (weight, n) tuple → confidence hesablamada istifadə olunur
+def calculate_h2h_weight(h2h_stats: Dict) -> Tuple[float, int]:
     if not h2h_stats or 'matches' not in h2h_stats:
-        return 1.0
+        return 1.0, 0
     matches = h2h_stats.get('matches') or []
     if not matches:
-        return 1.0
-    total_home = 0
-    total_away = 0
+        return 1.0, 0
     last5 = matches[-5:]
-    for m in last5:
-        total_home += safe(m.get('home_goals'), 0)
-        total_away += safe(m.get('away_goals'), 0)
+    total_home = sum(safe(m.get('home_goals'), 0) for m in last5)
+    total_away = sum(safe(m.get('away_goals'), 0) for m in last5)
     n = len(last5)
     if n == 0:
-        return 1.0
+        return 1.0, 0
     avg_home = total_home / n
     avg_away = total_away / n
     advantage = avg_home - avg_away
     sample_factor = min(1.0, n / 5.0)
     weight = 1.0 + (advantage / 3.0) * sample_factor
-    return max(0.5, min(1.5, weight))
+    return max(0.5, min(1.5, weight)), n
 
 # ========== ƏSAS HESABLAMA FUNKSİYALARI ==========
 
@@ -94,8 +100,13 @@ def calculate_1x2(team1_stats: Dict, team2_stats: Dict, h2h_weight: float = 1.0)
     lambda_home = max(0.2, min(4.0, lambda_home))
     lambda_away = max(0.2, min(4.0, lambda_away))
 
-    lambda_home *= h2h_weight
-    lambda_away /= max(0.5, h2h_weight)
+    # ✅ DÜZƏLİŞ 3: Simmetrik H2H lambda düzəltməsi
+    # Əvvəl: lambda_home *= h2h_weight
+    #        lambda_away /= max(0.5, h2h_weight)
+    # Problem: h2h_weight=1.2 → ev +20%, qonaq -17% → qonaq 2x zərər görürdü
+    # İndi: h2h_weight=1.2 → ev +20%, qonaq -20% (eyni faktor, əks istiqamət)
+    lambda_home = max(0.2, min(4.0, lambda_home * h2h_weight))
+    lambda_away = max(0.2, min(4.0, lambda_away * (2.0 - h2h_weight)))
 
     max_goals = max(10, int(max(lambda_home, lambda_away) * 3) + 1)
 
@@ -121,9 +132,10 @@ def calculate_1x2(team1_stats: Dict, team2_stats: Dict, h2h_weight: float = 1.0)
 
 def calculate_over_under(team1_stats: Dict, team2_stats: Dict,
                          line: float = 2.5, market: str = "goals") -> Dict:
+    # ✅ DÜZƏLİŞ: normalize_confidence ilə doğru 0-1 dəyər
     confidence = min(
-        get_stat(team1_stats, 'data_confidence', 0.7),
-        get_stat(team2_stats, 'data_confidence', 0.7)
+        normalize_confidence(get_stat(team1_stats, 'data_confidence', 0.7)),
+        normalize_confidence(get_stat(team2_stats, 'data_confidence', 0.7))
     )
 
     if market == "goals":
@@ -135,55 +147,46 @@ def calculate_over_under(team1_stats: Dict, team2_stats: Dict,
         la_avg = get_stat(team2_stats, 'league_away_avg_goals', 1.2)
         expected_total = home_attack * away_defense * lh_avg + away_attack * home_defense * la_avg
         league_avg = get_stat(team1_stats, 'league_avg_goals', 2.7)
-
     elif market == "corners":
         home_avg = get_stat(team1_stats, 'avg_corners_for',     5.0)
         away_avg = get_stat(team2_stats, 'avg_corners_against', 4.5)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_corners', 9.5)
-
     elif market == "sot":
         home_avg = get_stat(team1_stats, 'avg_sot_for',     4.5)
         away_avg = get_stat(team2_stats, 'avg_sot_against', 4.0)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_sot', 8.5)
-
     elif market == "fouls":
         home_avg = get_stat(team1_stats, 'avg_fouls_committed', 11.0)
         away_avg = get_stat(team2_stats, 'avg_fouls_suffered',  10.5)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_fouls', 22.0)
-
     elif market == "cards":
         home_avg = get_stat(team1_stats, 'avg_cards_per_match', 2.5)
         away_avg = get_stat(team2_stats, 'avg_cards_per_match', 2.7)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_cards', 5.2)
-
     elif market == "offsides":
         home_avg = get_stat(team1_stats, 'avg_offsides', 2.0)
         away_avg = get_stat(team2_stats, 'avg_offsides', 2.1)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_offsides', 4.1)
-
     elif market == "throwins":
         home_avg = get_stat(team1_stats, 'avg_throwins', 20.0)
         away_avg = get_stat(team2_stats, 'avg_throwins', 19.0)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_throwins', 39.0)
-
     elif market == "shots":
         home_avg = get_stat(team1_stats, 'avg_shots', 12.0)
         away_avg = get_stat(team2_stats, 'avg_shots', 10.5)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_shots', 22.5)
-
     elif market == "penalties":
         home_avg = get_stat(team1_stats, 'avg_penalties_for',     0.2)
         away_avg = get_stat(team2_stats, 'avg_penalties_against', 0.15)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_penalties', 0.35)
-
     else:
         return {"over": 0.5, "under": 0.5}
 
@@ -275,7 +278,6 @@ def calculate_first_half(team1_stats: Dict, team2_stats: Dict) -> Dict:
         prob_home /= total; prob_draw /= total; prob_away /= total
 
     exp_fh = lambda_home_fh + lambda_away_fh
-
     prob_home_scores = 1 - poisson_probability(lambda_home_fh, 0)
     prob_away_scores = 1 - poisson_probability(lambda_away_fh, 0)
     btts = prob_home_scores * prob_away_scores
@@ -300,36 +302,30 @@ def calculate_first_half(team1_stats: Dict, team2_stats: Dict) -> Dict:
 
 def calculate_combination(team1_stats: Dict, team2_stats: Dict, markets: List[str]) -> Dict:
     results = {}
-
     if "over2.5_btts" in markets:
         ou   = calculate_over_under(team1_stats, team2_stats, 2.5, "goals")
         btts = calculate_btts(team1_stats, team2_stats)
         prob = ou["over"] * btts["yes"]
         prob = min(prob * (1 + 0.2 * (1 - prob)), 0.95)
         results["over2.5_and_btts"] = round(prob, 4)
-
     if "home_win_over2.5" in markets:
         x12  = calculate_1x2(team1_stats, team2_stats)
         ou   = calculate_over_under(team1_stats, team2_stats, 2.5, "goals")
         results["home_win_and_over2.5"] = round(x12["home_win"] * ou["over"], 4)
-
     if "draw_under2.5" in markets:
         x12  = calculate_1x2(team1_stats, team2_stats)
         ou   = calculate_over_under(team1_stats, team2_stats, 2.5, "goals")
         results["draw_and_under2.5"] = round(x12["draw"] * ou["under"], 4)
-
     return results
 
 def calculate_corner_handicap(team1_stats: Dict, team2_stats: Dict, handicap: float = -1.5) -> Dict:
     home_corners = get_stat(team1_stats, 'avg_corners_for', 5.0)
     away_corners = get_stat(team2_stats, 'avg_corners_for', 4.5)
     expected_diff = home_corners - away_corners
-
     if expected_diff > handicap:
         prob_home_cover = 0.6 + (expected_diff - handicap) / 10
     else:
         prob_home_cover = 0.4 + (expected_diff - handicap) / 10
-
     prob_home_cover = max(0.1, min(0.9, prob_home_cover))
     return {
         "home_cover": round(prob_home_cover, 4),
@@ -339,7 +335,6 @@ def calculate_corner_handicap(team1_stats: Dict, team2_stats: Dict, handicap: fl
 def calculate_cascading_bonus(m1_results: Dict) -> Dict:
     confidence_boost = 0.0
     high_prob_markets = []
-
     for market, data in m1_results.items():
         if not isinstance(data, dict):
             continue
@@ -355,7 +350,6 @@ def calculate_cascading_bonus(m1_results: Dict) -> Dict:
             if safe(data["2.5"].get("over"), 0) > 0.6:
                 high_prob_markets.append("over_2.5")
                 confidence_boost += 0.02
-
     return {
         "boost":           round(min(0.15, confidence_boost), 4),
         "trigger_markets": high_prob_markets
@@ -370,15 +364,13 @@ def run_m1(parser_json: Dict) -> Dict:
     team2_stats = parser_json.get("team2_stats") or {}
     h2h_stats   = parser_json.get("h2h_stats")   or {}
 
-    # team1_stats / team2_stats boş gəlsə default dəyərlərlə davam et
-    # (bütün get_stat çağırışları safe-dir, 0 vurma olmur)
-
-    h2h_weight = calculate_h2h_weight(h2h_stats)
+    # ✅ DÜZƏLİŞ 2: h2h_weight ilə birlikdə match sayını al
+    h2h_weight, h2h_match_count = calculate_h2h_weight(h2h_stats)
 
     results = {
-        "team1":       team1,
-        "team2":       team2,
-        "h2h_weight":  h2h_weight,
+        "team1":      team1,
+        "team2":      team2,
+        "h2h_weight": h2h_weight,
         "m1_confidence": 0.0
     }
 
@@ -410,11 +402,28 @@ def run_m1(parser_json: Dict) -> Dict:
     )
     results["cascade_bonus"] = calculate_cascading_bonus(results)
 
-    data_conf = (
-        get_stat(team1_stats, 'data_confidence', 0.7) +
-        get_stat(team2_stats, 'data_confidence', 0.7)
-    ) / 2
-    results["m1_confidence"] = round(min(0.95, data_conf * (0.8 + h2h_weight * 0.2)), 4)
+    # ✅ DÜZƏLİŞ 4: m1_confidence → 0-10 SCALE, düzgün formula
+    # Əvvəl: min(0.95, data_conf * (0.8 + h2h_weight * 0.2))
+    # Problem 1: 0-0.95 qaytarırdı, UI 0-10 gözləyirdi → 0.5 * 10 = 5.0/10 kimi
+    #            amma M2/M3 birbaşa 0-10 qaytarırdısa → uyğunsuzluq
+    # Problem 2: h2h_weight > 1 olduqda confidence data_conf-dan yuxarı çıxırdı (yanlış)
+    # Problem 3: H2H match sayı nəzərə alınmırdı
+
+    raw_conf1 = normalize_confidence(get_stat(team1_stats, 'data_confidence', 0.5))
+    raw_conf2 = normalize_confidence(get_stat(team2_stats, 'data_confidence', 0.5))
+    data_conf = (raw_conf1 + raw_conf2) / 2.0  # 0-1 aralığında
+
+    # H2H nə qədər çox match varsa, bir az əlavə güvən
+    h2h_bonus = min(0.1, h2h_match_count * 0.02)  # maks +0.10
+
+    # H2H weight confidence-i yalnız azalda bilər, artıra bilməz
+    # (çünki h2h_weight hesablama üçündür, confidence üçün deyil)
+    h2h_conf_penalty = max(0.0, abs(h2h_weight - 1.0) * 0.05)
+
+    final_conf_0_1 = min(1.0, data_conf + h2h_bonus - h2h_conf_penalty)
+
+    # 0-10 scale-a çevir
+    results["m1_confidence"] = round(final_conf_0_1 * 10, 2)
 
     return results
 
