@@ -6,14 +6,14 @@ import requests
 from typing import Dict, Any, List, Optional
 
 try:
-    from config import GROQ_KEY_M2, MODEL_M2, TAVILY_KEY, SERPER_KEY
+    from config import GEMINI_API_KEY, MODEL_M2, TAVILY_KEY, SERPER_KEY
 except ImportError:
-    GROQ_KEY_M2 = os.getenv("GROQ_KEY_M2")
-    MODEL_M2    = os.getenv("MODEL_M2", "gemini-2.5-flash")
-    TAVILY_KEY  = os.getenv("TAVILY_KEY")
-    SERPER_KEY  = os.getenv("SERPER_KEY")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    MODEL_M2       = os.getenv("MODEL_M2", "gemini-2.5-flash")
+    TAVILY_KEY     = os.getenv("TAVILY_KEY")
+    SERPER_KEY     = os.getenv("SERPER_KEY")
 
-GROQ_API_URL   = "https://api.groq.com/openai/v1/chat/completions"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + GEMINI_API_KEY
 TAVILY_API_URL = "https://api.tavily.com/search"
 SERPER_API_URL = "https://google.serper.dev/search"
 
@@ -327,7 +327,7 @@ def run_m2(parser_json: Dict) -> Dict:
         return _empty_result(warning="Heç bir axtarış nəticəsi tapılmadı.")
 
     try:
-        result = analyze_with_groq(team1, team2, all_search_text)
+        result = analyze_with_gemini(team1, team2, all_search_text)
         result = _post_process(result)
 
         # ✅ DÜZƏLİŞ: m2_guveni artıq 0-1 aralığında
