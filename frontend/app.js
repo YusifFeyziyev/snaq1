@@ -542,20 +542,20 @@ function nameToSeed(name) {
 
 function generateTrajectory(winProb, drawProb, teamName, numGames) {
   const rng = seededRng(nameToSeed(teamName));
-  const lossProb = Math.max(0, 1 - winProb - drawProb);
   let cum = 0;
   const pts = [];
   for (let i = 0; i < numGames; i++) {
     const r = rng();
     let result, gained;
-    if (r < winProb) { result = "W"; gained = 3; }
-    else if (r < winProb + drawProb) { result = "D"; gained = 1; }
-    else { result = "L"; gained = 0; }
+    if (r < winProb) { result = "W"; gained = 1; }       // yuxarı
+    else if (r < winProb + drawProb) { result = "D"; gained = 0; }  // düz
+    else { result = "L"; gained = -1; }                   // aşağı
     cum += gained;
     pts.push({ g: i + 1, pts: gained, cum, result });
   }
   return pts;
 }
+
 
 function drawTrajectoryChart(m1, team1, team2, m4) {
   const canvas = document.getElementById("trajectoryChart");
@@ -587,16 +587,12 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
   const cW  = W - PAD.left - PAD.right;
   const cH  = H - PAD.top  - PAD.bottom;
 
-  const maxPts = Math.max(
-    homeTraj[N - 1].cum,
-    awayTraj[N - 1].cum,
-    N * 3 * 0.4
-  );
+  const maxPts = N;
 
   ctx.clearRect(0, 0, W, H);
 
   // Y grid
-  const yTicks = [0, 10, 20, 30].filter(v => v <= maxPts + 2);
+  const yTicks = [-15, -10, -5, 0, 5, 10, 15].filter(v => v >= -numGames && v <= numGames);
   yTicks.forEach(v => {
     const y = PAD.top + (1 - v / maxPts) * cH;
     ctx.beginPath();
@@ -637,7 +633,7 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
   ctx.restore();
 
   function getX(i) { return PAD.left + (i / (N - 1)) * cW; }
-  function getY(cum) { return PAD.top + (1 - cum / maxPts) * cH; }
+  function getY(cum) { return PAD.top + (0.5 - cum / (maxPts * 2)) * cH; }
 
   function drawLine(traj, lineColor) {
     // Area fill
