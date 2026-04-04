@@ -267,7 +267,7 @@ Yalnız aşağıdakı JSON strukturunu qaytar:
         "confidence": 0.0
     }}
 }}"""
-
+    content = ""
     try:
         response = client.models.generate_content(
             model=model_name,
