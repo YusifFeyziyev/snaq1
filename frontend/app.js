@@ -543,13 +543,13 @@ function nameToSeed(name) {
 function generateTrajectory(winProb, drawProb, teamName, numGames) {
   const rng = seededRng(nameToSeed(teamName));
   let cum = 0;
-  const pts = [];
+  const pts = [{ g: 0, pts: 0, cum: 0, result: "S" }]; // 0-dan başla
   for (let i = 0; i < numGames; i++) {
     const r = rng();
     let result, gained;
-    if (r < winProb) { result = "W"; gained = 1; }       // yuxarı
-    else if (r < winProb + drawProb) { result = "D"; gained = 0; }  // düz
-    else { result = "L"; gained = -1; }                   // aşağı
+    if (r < winProb)                    { result = "W"; gained =  1; }
+    else if (r < winProb + drawProb)    { result = "D"; gained =  0; }
+    else                                { result = "L"; gained = -1; }
     cum += gained;
     pts.push({ g: i + 1, pts: gained, cum, result });
   }
@@ -570,8 +570,8 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
   if (drawProb > 1) drawProb /= 100;
 
   const N = 15;
-  const homeTraj = generateTrajectory(homeWin, drawProb * 0.55, team1, N);
-  const awayTraj = generateTrajectory(awayWin, drawProb * 0.45, team2, N);
+const homeTraj = generateTrajectory(homeWin, drawProb * 0.55, team1, N);
+const awayTraj = generateTrajectory(awayWin, drawProb * 0.45, team2, N);
 
   const dpr = window.devicePixelRatio || 1;
   const W   = canvas.offsetWidth || 800;
@@ -587,12 +587,12 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
   const cW  = W - PAD.left - PAD.right;
   const cH  = H - PAD.top  - PAD.bottom;
 
-  const maxPts = N;
+  const maxPts = N; // ±15
 
   ctx.clearRect(0, 0, W, H);
 
   // Y grid
-  const yTicks = [-15, -10, -5, 0, 5, 10, 15].filter(v => v >= -N && v <= N);
+  const yTicks = [-N, -10, -5, 0, 5, 10, N].filter(v => v >= -N && v <= N);
   yTicks.forEach(v => {
     const y = PAD.top + (1 - v / maxPts) * cH;
     ctx.beginPath();
@@ -632,8 +632,8 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
   ctx.fillText("Xal", 0, 0);
   ctx.restore();
 
-  function getX(i) { return PAD.left + (i / (N - 1)) * cW; }
-  function getY(cum) { return PAD.top + (0.5 - cum / (maxPts * 2)) * cH; }
+  function getX(i) { return PAD.left + (i / N) * cW; }
+function getY(cum) { return PAD.top + (0.5 - cum / (N * 2)) * cH; }
 
   function drawLine(traj, lineColor) {
     // Area fill
@@ -684,28 +684,36 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
     });
   }
 
+  // Sıfır xətti
+const zeroY = getY(0);
+ctx.beginPath();
+ctx.moveTo(PAD.left, zeroY);
+ctx.lineTo(PAD.left + cW, zeroY);
+ctx.strokeStyle = "rgba(255,255,255,0.15)";
+ctx.lineWidth = 1.5;
+ctx.setLineDash([6, 4]);
+ctx.stroke();
+ctx.setLineDash([]); 
+
   drawLine(homeTraj, "rgb(59,130,246)");
   drawLine(awayTraj, "rgb(245,158,11)");
 
-  // Mövsüm sonu xal fərqi
-  const homeEnd = homeTraj[N - 1].cum;
-  const awayEnd = awayTraj[N - 1].cum;
+  const homeEnd = homeTraj[homeTraj.length - 1].cum;
+  const awayEnd = awayTraj[awayTraj.length - 1].cum;
   const diff = homeEnd - awayEnd;
   const diffTxt = diff > 0
-    ? `${team1} ${diff} xal üstün`
-    : diff < 0
-    ? `${team2} ${Math.abs(diff)} xal üstün`
-    : "Bərabər nəticə";
+  ? `${team1} ${diff} addım üstün`
+  : diff < 0
+  ? `${team2} ${Math.abs(diff)} addım üstün`
+  : "Bərabər";
 
-  // Legend
-  const leg = document.getElementById("chartLegend");
   if (leg) {
-    leg.innerHTML = `
-      <span><span class="legend-dot" style="background:#3b82f6"></span>${team1} (${homeEnd} xal)</span>
-      <span><span class="legend-dot" style="background:#f59e0b"></span>${team2} (${awayEnd} xal)</span>
-      <span style="margin-left:auto;font-size:11px;font-weight:700;color:${diff >= 0 ? '#3b82f6' : '#f59e0b'}">${diffTxt}</span>
-    `;
-  }
+  leg.innerHTML = `
+    <span><span class="legend-dot" style="background:#3b82f6"></span>${team1} (${homeEnd > 0 ? "+" : ""}${homeEnd})</span>
+    <span><span class="legend-dot" style="background:#f59e0b"></span>${team2} (${awayEnd > 0 ? "+" : ""}${awayEnd})</span>
+    <span style="margin-left:auto;font-size:11px;font-weight:700;color:${diff >= 0 ? '#3b82f6' : '#f59e0b'}">${diffTxt}</span>
+  `;
+}
 
   // M4 qərarına görə chart border rəngi
   const chartWrapper = document.getElementById("chartContainerWrapper");
