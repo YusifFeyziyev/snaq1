@@ -5,4 +5,4 @@ tavily-python
 requests
 python-dotenv
 gunicorn
-google-generativeai
+google-genai
