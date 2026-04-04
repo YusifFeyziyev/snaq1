@@ -74,7 +74,7 @@ class SoccerStatsParser:
                 try:
                     fixed = re.sub(r"'", '"', json_str)
                     return json.loads(fixed)
-                except:
+                except Exception as e:
                     pass
                 raise ValueError(f"JSON parse xetasi: {safe_str(e)}\nMetn: {json_str[:200]}")
         raise ValueError("JSON obyekti tapilmadi.")

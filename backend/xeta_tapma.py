@@ -1,360 +1,275 @@
-# debug_runner.py — Layihe tam diaqnostika aləti
-# Istifade: python debug_runner.py
-# Backend qovluguna qoy, ozü root-u tapar
+# debug_runner.py — Layihe diaqnostika aleti
+# Ishletmek: python debug_runner.py  (backend qovluguna qoy)
 
-import sys
-import io
-import os
-import ast
-import py_compile
-import traceback
-import importlib
-import json
-import re
-import tokenize
+import sys, io, os, ast, re, traceback, json, importlib.util
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-# ─────────────────────────────────────────
-SKIP_DIRS = {
-    ".git", "__pycache__", "node_modules", ".venv", "venv",
-    "env", "dist", "build", ".next", ".cache", ".idea", ".mypy_cache"
-}
-SKIP_FILES = {"debug_runner.py"}
-# ─────────────────────────────────────────
+def safe(t): return str(t).encode('ascii', errors='replace').decode('ascii')
 
-def safe(text):
-    return str(text).encode('ascii', errors='replace').decode('ascii')
+SKIP_DIRS  = {".git","__pycache__","node_modules",".venv","venv","dist","build",".next",".idea"}
+SKIP_FILES = {"debug_runner.py", "xeta_tapma.py"}
 
-def header(title):
-    print(f"\n{'=' * 60}")
-    print(f"  {title}")
-    print(f"{'=' * 60}")
-
-def ok(msg):    print(f"  [OK]    {msg}")
-def warn(msg):  print(f"  [XEBERDARLIQ] {msg}")
-def err(msg):   print(f"  [XETA]  {msg}")
-def info(msg):  print(f"  [INFO]  {msg}")
-
-# ══════════════════════════════════════════
-# LAYIHE KOKU
-# ══════════════════════════════════════════
 def find_root():
-    current = os.path.dirname(os.path.abspath(__file__))
-    if os.path.basename(current).lower() in ("backend", "src"):
-        return os.path.dirname(current)
-    return current
+    cur = os.path.dirname(os.path.abspath(__file__))
+    return os.path.dirname(cur) if os.path.basename(cur).lower() in ("backend","src") else cur
 
-# ══════════════════════════════════════════
-# 1. ENCODING YOXLAMASI
-# ══════════════════════════════════════════
+def all_py_files(root):
+    for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if d not in SKIP_DIRS]
+        for f in fns:
+            if f.endswith(".py") and f not in SKIP_FILES:
+                yield os.path.join(dp, f)
+
+def rel(root, path):
+    return os.path.relpath(path, root).replace("\\","/")
+
+# ─────────────────────────────────────────────────────────
+# 1. ENCODING — Yalniz backend .py fayllarinda REAL xeta
+#
+# QAYDA:
+#   - Azerbaycan herfleri (e, i, u, o, s, c, g ve s.) .py
+#     faylinda string/sherh icinde olmamalidir
+#   - AMMA: ensure_ascii=False ile JSON-a gedirse, o string
+#     HTTP body-e dushur ve requests UTF-8 encode edir → PROBLEM YOX
+#   - PROBLEM OLAN: HTTP HEADER-e dushan string (API key, Authorization)
+#   - .env-de YALNIZ deyerleri yoxla, sherhler (#) ile bashlayan
+#     satirlari atla
+# ─────────────────────────────────────────────────────────
 def check_encoding(root):
-    header("1. ENCODİNG YOXLAMASI (.py, .env, .js, .ts, .jsx, .tsx)")
+    print("\n[1] ENCODING YOXLAMASI")
+    print("    Qayda: .py fayllarinda STRING/SHEREHDE Azerbaycan herfi olmamalidir")
+    print("    (ensure_ascii=False icindeki deyerler bu yoxlamaya daxil deyil)")
     found = False
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if fname in SKIP_FILES:
-                continue
-            ext = os.path.splitext(fname)[1].lower()
-            is_env = fname.startswith(".env") or fname == ".env"
-            if ext not in (".py", ".js", ".ts", ".jsx", ".tsx", ".json") and not is_env:
-                continue
-            fpath = os.path.join(dirpath, fname)
-            rel = os.path.relpath(fpath, root).replace("\\", "/")
-            try:
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
-                for i, line in enumerate(lines, 1):
-                    bad = [(j, c, hex(ord(c))) for j, c in enumerate(line.rstrip("\n")) if ord(c) > 127]
-                    if bad:
-                        found = True
-                        err(f"{rel}  —  Setir {i}")
-                        for pos, char, code in bad:
-                            print(f"           Movqe {pos+1}: '{safe(char)}'  ({code})")
-                        print(f"           Metn: {safe(line.rstrip())[:80]}")
-            except Exception as e:
-                err(f"{rel} oxunmadi: {safe(e)}")
-    if not found:
-        ok("Encoding problemi tapilmadi.")
-
-# ══════════════════════════════════════════
-# 2. PYTHON SİNTAKSİS YOXLAMASI
-# ══════════════════════════════════════════
-def check_syntax(root):
-    header("2. PYTHON SİNTAKSİS YOXLAMASI")
-    found = False
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if not fname.endswith(".py") or fname in SKIP_FILES:
-                continue
-            fpath = os.path.join(dirpath, fname)
-            rel = os.path.relpath(fpath, root).replace("\\", "/")
-            try:
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    source = f.read()
-                ast.parse(source, filename=fpath)
-                ok(f"{rel}")
-            except SyntaxError as e:
-                found = True
-                err(f"{rel}  —  Setir {e.lineno}")
-                print(f"           Xeta: {safe(e.msg)}")
-                if e.text:
-                    print(f"           Kod : {safe(e.text.rstrip())}")
-            except Exception as e:
-                err(f"{rel}: {safe(e)}")
-    if not found:
-        ok("Sintaksis xetasi tapilmadi.")
-
-# ══════════════════════════════════════════
-# 3. İMPORT YOXLAMASI
-# ══════════════════════════════════════════
-def check_imports(root):
-    header("3. İMPORT YOXLAMASI (quraşdırılmamış paketlər)")
     backend = os.path.join(root, "backend")
-    search_paths = [root, backend] if os.path.exists(backend) else [root]
+    target_dir = backend if os.path.exists(backend) else root
 
-    found = False
-    checked = set()
-
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if not fname.endswith(".py") or fname in SKIP_FILES:
+    for fpath in all_py_files(target_dir):
+        r = rel(root, fpath)
+        try:
+            lines = open(fpath, encoding="utf-8", errors="replace").readlines()
+        except:
+            continue
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            # Sherehlerle bashlayan satirlari atla (bunlar sadece izah ucundur)
+            if stripped.startswith("#"):
                 continue
-            fpath = os.path.join(dirpath, fname)
-            rel = os.path.relpath(fpath, root).replace("\\", "/")
-            try:
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    source = f.read()
-                tree = ast.parse(source)
-            except:
+            bad = [(j+1, c, hex(ord(c))) for j,c in enumerate(line.rstrip("\n")) if ord(c) > 127]
+            if not bad:
                 continue
+            # ensure_ascii=False icindeki string literal icinde olan herfler
+            # HTTP body-e gedir, problem yaratmir — atla
+            if 'ensure_ascii=False' in line:
+                continue
+            found = True
+            print(f"\n  [XETA] {r}  —  Setir {i}")
+            print(f"         Metn : {safe(line.rstrip()[:90])}")
+            for pos, char, code in bad:
+                print(f"         --> Movqe {pos}: '{safe(char)}'  ({code})")
+                if code in ('0x259','0x131','0x11f','0x15f','0x18f','0x130','0xfc','0xf6','0xe7','0xc7'):
+                    print(f"             Bu Azerbaycan herfidir — ASCII qarshiligi ile evez edin")
 
-            for node in ast.walk(tree):
-                pkg = None
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        pkg = alias.name.split(".")[0]
-                elif isinstance(node, ast.ImportFrom):
-                    if node.module:
-                        pkg = node.module.split(".")[0]
-
-                if pkg and pkg not in checked:
-                    checked.add(pkg)
-                    # Oz lokal modullari atla
-                    local = any(
-                        os.path.exists(os.path.join(p, pkg + ".py")) or
-                        os.path.exists(os.path.join(p, pkg))
-                        for p in search_paths
-                    )
-                    if local:
-                        continue
-                    try:
-                        importlib.util.find_spec(pkg)
-                    except (ModuleNotFoundError, ValueError):
-                        found = True
-                        err(f"'{pkg}'  —  tapilmadi  ({rel} faylinda istifade olunur)")
-                        print(f"           Qurashdirin: pip install {pkg}")
+    # .env — YALNIZ deyerleri yoxla (sherhler normal)
+    for ef in [os.path.join(root,".env"), os.path.join(os.path.join(root,"backend"),".env")]:
+        if not os.path.exists(ef):
+            continue
+        r = rel(root, ef)
+        for i, line in enumerate(open(ef, encoding="utf-8", errors="replace"), 1):
+            line = line.rstrip("\n")
+            if line.startswith("#") or "=" not in line:
+                continue  # sherhler normaldir, atla
+            _, _, val = line.partition("=")
+            val = val.strip().strip('"').strip("'")
+            bad = [(j+1,c,hex(ord(c))) for j,c in enumerate(val) if ord(c) > 127]
+            if bad:
+                found = True
+                key = line.split("=")[0].strip()
+                print(f"\n  [XETA] {r} — '{key}' DEYERINDE xususi herf!")
+                for pos, char, code in bad:
+                    print(f"         Movqe {pos}: '{safe(char)}'  ({code})")
+                print(f"         Həll: Bu key-i silib Groq saytindan yeniden kopyalayin")
 
     if not found:
-        ok("Butun importlar movcuddur.")
+        print("  [OK] Encoding problemi tapilmadi.")
 
-# ══════════════════════════════════════════
+# ─────────────────────────────────────────────────────────
+# 2. PYTHON SINTAKSIS
+# ─────────────────────────────────────────────────────────
+def check_syntax(root):
+    print("\n[2] PYTHON SINTAKSIS YOXLAMASI")
+    errors = []
+    for fpath in all_py_files(root):
+        try:
+            ast.parse(open(fpath, encoding="utf-8", errors="replace").read())
+        except SyntaxError as e:
+            errors.append((rel(root,fpath), e))
+    if errors:
+        for r, e in errors:
+            print(f"  [XETA] {r}  —  Setir {e.lineno}: {safe(e.msg)}")
+            if e.text: print(f"         Kod: {safe(e.text.rstrip())}")
+    else:
+        print("  [OK] Butun .py fayllarinin sintaksisi duzgundur.")
+
+# ─────────────────────────────────────────────────────────
+# 3. QURASHDIRILMAMISH PAKETLER
+# ─────────────────────────────────────────────────────────
+def check_imports(root):
+    print("\n[3] QURASHDIRILMAMISH PAKET YOXLAMASI")
+    backend = os.path.join(root, "backend")
+    local_paths = [root, backend, os.path.join(backend,"modules")]
+    checked, missing = set(), []
+
+    for fpath in all_py_files(root):
+        r = rel(root, fpath)
+        try: tree = ast.parse(open(fpath, encoding="utf-8", errors="replace").read())
+        except: continue
+        for node in ast.walk(tree):
+            pkgs = []
+            if isinstance(node, ast.Import):
+                pkgs = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                pkgs = [node.module.split(".")[0]]
+            for pkg in pkgs:
+                if pkg in checked: continue
+                checked.add(pkg)
+                is_local = any(
+                    os.path.exists(os.path.join(p, pkg+".py")) or
+                    os.path.exists(os.path.join(p, pkg))
+                    for p in local_paths
+                )
+                if is_local: continue
+                try: importlib.util.find_spec(pkg)
+                except (ModuleNotFoundError, ValueError):
+                    missing.append((pkg, r))
+    if missing:
+        for pkg, r in missing:
+            print(f"  [XETA] '{pkg}' tapilmadi  ({r})")
+            print(f"         Qurashdirin: pip install {pkg}")
+    else:
+        print("  [OK] Butun paketler movcuddur.")
+
+# ─────────────────────────────────────────────────────────
 # 4. .ENV YOXLAMASI
-# ══════════════════════════════════════════
+# ─────────────────────────────────────────────────────────
 def check_env(root):
-    header("4. .ENV FAYLI YOXLAMASI")
-    env_path = None
-    for candidate in [
-        os.path.join(root, ".env"),
-        os.path.join(root, "backend", ".env"),
-    ]:
-        if os.path.exists(candidate):
-            env_path = candidate
-            break
-
+    print("\n[4] .ENV FAYLI YOXLAMASI")
+    backend = os.path.join(root, "backend")
+    env_path = next((p for p in [os.path.join(root,".env"), os.path.join(backend,".env")] if os.path.exists(p)), None)
     if not env_path:
-        warn(".env fayli tapilmadi! (root və ya backend qovlugunda axtarildi)")
+        print("  [XETA] .env fayli tapilmadi!")
         return
-
-    info(f".env tapildi: {os.path.relpath(env_path, root)}")
-    empty_keys = []
-    ok_keys = []
-
-    with open(env_path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-
-    for i, line in enumerate(lines, 1):
+    print(f"  [OK] .env tapildi: {rel(root, env_path)}")
+    empty = []
+    filled = []
+    for i, line in enumerate(open(env_path, encoding="utf-8", errors="replace"), 1):
         line = line.rstrip("\n")
-        if not line or line.startswith("#"):
-            continue
+        if not line or line.startswith("#"): continue  # sherhler normaldir
         if "=" not in line:
-            warn(f"Setir {i}: '=' yoxdur -> {safe(line)}")
+            print(f"  [XETA] Setir {i}: '=' yoxdur")
             continue
         key, _, val = line.partition("=")
-        key = key.strip()
         val = val.strip().strip('"').strip("'")
-
-        # Non-ASCII yoxla
-        bad = [(j, c, hex(ord(c))) for j, c in enumerate(val) if ord(c) > 127]
-        if bad:
-            err(f"Setir {i}: '{key}' — deyerde xususi herf var!")
-            for pos, char, code in bad:
-                print(f"           Movqe {pos+1}: '{safe(char)}'  ({code})")
-        elif not val:
-            empty_keys.append((i, key))
-            warn(f"Setir {i}: '{key}' — bos deger!")
+        if not val:
+            empty.append(key.strip())
         else:
-            ok_keys.append(key)
+            filled.append(key.strip())
+    if filled:
+        print(f"  [OK] Dolu key-ler: {', '.join(filled)}")
+    for k in empty:
+        print(f"  [XEBERDARLIQ] '{k}' bosdur — bu key lazim olsa API ishlemeye biler")
 
-    if ok_keys:
-        ok(f"Dolu key-ler: {', '.join(ok_keys)}")
-    if empty_keys:
-        for lineno, k in empty_keys:
-            warn(f"Setir {lineno}: '{k}' bos — API call-lar ishlemeyecek")
-
-# ══════════════════════════════════════════
-# 5. UMUMİ KOD PROBLEMLERI
-# ══════════════════════════════════════════
-def check_common_issues(root):
-    header("5. UMUMİ KOD PROBLEMLERİ")
+# ─────────────────────────────────────────────────────────
+# 5. REAL KOD BUQLARI
+# ─────────────────────────────────────────────────────────
+def check_bugs(root):
+    print("\n[5] REAL KOD BUQLARI")
     found = False
-
-    patterns = [
-        # (regex, mesaj, ciddilik)
-        (r'open\s*\([^)]+\)(?!\s*as)',
-         "open() istifade olunub amma 'with' yoxdur — fayl baglanmaya biler", "warn"),
-        (r'open\s*\(["\'][^"\']+["\']\s*,\s*["\'][rwa]["\'](?!\s*,\s*encoding)',
-         "open() cagririsinda encoding=\'utf-8\' yoxdur", "warn"),
-        (r'except\s*:',
-         "Cildirmis 'except:' — butun xetalari yutur, debug chetinleshir", "warn"),
-        (r'except\s+Exception\s*:',
-         "'except Exception:' — xeta mesaji itir, 'as e' elave edin", "warn"),
-        (r'print\s*\(',
-         "print() tapildi — production-da log sistemi islede bilersiniz", "info"),
-        (r'TODO|FIXME|HACK|XXX',
-         "Tamamlanmamish qeyd tapildi", "warn"),
-        (r'password\s*=\s*["\'][^"\']{3,}["\']',
-         "Kodun icinde hardcoded parol gorunur!", "err"),
-        (r'api_key\s*=\s*["\'][^"\']{10,}["\']',
-         "Kodun icinde hardcoded API key gorunur!", "err"),
-        (r'0\.0\.0\.0|localhost|127\.0\.0\.1',
-         "Hardcoded host adresi — production-da problem ola biler", "info"),
-        (r'time\.sleep\s*\(\s*[5-9]\d*\s*\)',
-         "Uzun sleep() tapildi — performansa tesir ede biler", "warn"),
+    rules = [
+        # (regex, izah, ciddilik)
+        (r'\bexcept\s*:',
+         "KOR EXCEPT — SystemExit, KeyboardInterrupt de tutur. 'except Exception as e:' yazin",
+         "XETA"),
+        (r'\bexcept\s+Exception\s*(?!\s+as\b)',
+         "AS E YOXDUR — xeta mesajini gormek olmayacaq. 'except Exception as e:' yazin",
+         "XETA"),
+        (r'open\s*\(["\'][^"\']+["\']\s*,\s*["\'][rwa][b]?["\']\s*\)',
+         "ENCODING YOXDUR — open() cagrisinda encoding='utf-8' olmalidir",
+         "XEBERDARLIQ"),
+        (r'(password|secret)\s*=\s*["\'][^"\']{8,}["\']',
+         "HARDCODED SIRR — bu deyeri .env-e kocurun",
+         "XETA"),
     ]
-
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if not fname.endswith(".py") or fname in SKIP_FILES:
-                continue
-            fpath = os.path.join(dirpath, fname)
-            rel = os.path.relpath(fpath, root).replace("\\", "/")
-            try:
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
-            except:
-                continue
-
-            for i, line in enumerate(lines, 1):
-                stripped = line.strip()
-                if stripped.startswith("#"):
-                    continue
-                for pattern, msg, level in patterns:
-                    if re.search(pattern, line, re.IGNORECASE):
-                        found = True
-                        fn = {"warn": warn, "err": err, "info": info}[level]
-                        fn(f"{rel}  —  Setir {i}")
-                        print(f"           {msg}")
-                        print(f"           Kod: {safe(stripped[:80])}")
-                        break
-
+    for fpath in all_py_files(root):
+        if "frontend" in fpath.replace("\\","/"): continue
+        r = rel(root, fpath)
+        try: lines = open(fpath, encoding="utf-8", errors="replace").readlines()
+        except: continue
+        for i, line in enumerate(lines, 1):
+            s = line.strip()
+            if s.startswith("#"): continue
+            for pattern, msg, level in rules:
+                if re.search(pattern, line, re.IGNORECASE):
+                    found = True
+                    print(f"\n  [{level}] {r}  —  Setir {i}")
+                    print(f"           Sebeb: {msg}")
+                    print(f"           Kod  : {safe(s[:90])}")
+                    break
     if not found:
-        ok("Umumi kod problemi tapilmadi.")
+        print("  [OK] Real kod buqu tapilmadi.")
 
-# ══════════════════════════════════════════
-# 6. PARSER İŞLƏDİLMƏSİ
-# ══════════════════════════════════════════
+# ─────────────────────────────────────────────────────────
+# 6. PARSER TESTI
+# ─────────────────────────────────────────────────────────
 def run_parser(root):
-    header("6. PARSER TEST — işlədilir...")
+    print("\n[6] PARSER TESTI")
     try:
         backend = os.path.join(root, "backend")
         for p in [backend, root]:
-            if p not in sys.path:
-                sys.path.insert(0, p)
-
+            if p not in sys.path: sys.path.insert(0, p)
         from parser import parse_soccer_stats
-
-        sample = (
-            "Manchester United vs Liverpool\n"
-            "Premier League\n"
-            "Son 5 oyun: United: QMBMQ, Liverpool: MQBMQ\n"
-            "United evde ortalama 1.8 qol atir, 1.1 buraxir.\n"
-            "Liverpool seferde ortalama 2.0 qol atir, 0.9 buraxir.\n"
-            "Over 2.5 faiz: 65%\n"
-            "BTTS faiz: 54%\n"
-            "Korner ortalama: United 5.3, Liverpool 6.1\n"
+        result = parse_soccer_stats(
+            "Manchester United vs Liverpool\nPremier League\n"
+            "United evde ortalama 1.8 qol atir.\nOver 2.5 faiz: 65%\n"
         )
-
-        result = parse_soccer_stats(sample)
-        output = json.dumps(result, indent=2, ensure_ascii=True)
-        ok("Parser UGURLA isledi! Netice:")
-        sys.stdout.buffer.write(output.encode("utf-8") + b"\n")
-
+        print("  [OK] Parser ugurla isledi!")
+        print("  Netice (ilk 3 sahe):", {k:v for k,v in list(result.items())[:3]})
     except Exception as e:
-        err("PARSER XETASI!")
-        print()
+        print("  [XETA] Parser crash etdi!")
         tb = traceback.extract_tb(sys.exc_info()[2])
-        for frame in tb:
-            rel = safe(os.path.relpath(frame.filename, root).replace("\\", "/"))
-            print(f"  --> Fayl    : {rel}")
-            print(f"      Setir   : {frame.lineno}")
-            print(f"      Funksiya: {frame.name}")
-            print(f"      Kod     : {safe(str(frame.line))}")
-            print()
+        for fr in tb:
+            r = safe(rel(root, fr.filename))
+            if "site-packages" in r: continue
+            print(f"         Fayl   : {r}")
+            print(f"         Setir  : {fr.lineno}  |  Funksiya: {fr.name}")
+            print(f"         Kod    : {safe(str(fr.line))}")
         print(f"  Xeta novu   : {type(e).__name__}")
         print(f"  Xeta mesaji : {safe(e)}")
-
         s = str(e).lower()
-        print()
         if "latin-1" in s or "codec" in s:
-            err("SEBEB: Encoding xetasi!")
-            print("       .env faylindaki API key-in icinde xususi herf var.")
-            print("       Yuxaridaki [4] bolumune baxin.")
-        elif "401" in s or "invalid" in s:
-            err("SEBEB: API key sehvdir! console.groq.com-dan yenileyin.")
-        elif "rate limit" in s or "429" in s:
-            warn("SEBEB: Rate limit. Bir az gozleyib yeniden calishdirin.")
-        elif "timeout" in s or "connection" in s:
-            err("SEBEB: Internet baglantisi yoxdur!")
-        elif "no module" in s:
-            err("SEBEB: Paket qurashdirilmayib. pip install <paket_adi>")
+            print("  SEBEB: .env-deki API key-de xususi herf var. [1]-e baxin.")
+        elif "401" in s: print("  SEBEB: API key sehvdir.")
+        elif "429" in s or "rate" in s: print("  SEBEB: Rate limit. Gozleyin.")
+        elif "timeout" in s or "connection" in s: print("  SEBEB: Internet baglantisi yoxdur.")
+        elif "no module" in s: print("  SEBEB: Paket qurashdirilmayib.")
 
-# ══════════════════════════════════════════
-# ANA FUNKSIYA
-# ══════════════════════════════════════════
+# ─────────────────────────────────────────────────────────
 def main():
     root = find_root()
-
-    print("=" * 60)
-    print("  LAYİHƏ TAM DİAQNOSTİKASI")
-    print(f"  Layihe koku: {root}")
-    print("=" * 60)
-
+    print("=" * 55)
+    print("  LAYIHE DIAQNOSTIKASI")
+    print(f"  Kok: {root}")
+    print("=" * 55)
     check_encoding(root)
     check_syntax(root)
     check_imports(root)
     check_env(root)
-    check_common_issues(root)
+    check_bugs(root)
     run_parser(root)
-
-    print("\n" + "=" * 60)
-    print("  DİAQNOSTİKA BİTDİ")
-    print("=" * 60)
+    print("\n" + "=" * 55)
+    print("  DIAQNOSTIKA BITTI")
+    print("=" * 55)
 
 if __name__ == "__main__":
     main()

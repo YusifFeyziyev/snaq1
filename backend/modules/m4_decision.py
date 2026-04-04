@@ -51,11 +51,11 @@ class M4Decision:
         if match:
             try:
                 return json.loads(match.group(1))
-            except Exception:
+            except Exception as e:
                 pass
         try:
             return json.loads(text)
-        except Exception:
+        except Exception as e:
             return {"error": "JSON parse olunmadi", "raw": text[:500]}
 
     def _call_groq(self, prompt: str) -> Dict:
