@@ -979,7 +979,7 @@ async function startAnalysis() {
     const m1conf = m1?.m1_guveni || m1?.m1_confidence || 0;
     
     fillMod("M1", m1conf <= 10 ? m1conf / 10 : m1conf / 100);   // köhnə M1 xüsusi halı saxlandı
-    fillMod("M2", (m2?.m2_guveni || 0) / 10);
+    fillMod("M2", m2?.m2_guveni || 0);
     fillMod("M3", (m3?.m3_guveni || 0) / 10);
     fillMod("M4", (m4?.sistem_guveni || 0) / 10);
 
