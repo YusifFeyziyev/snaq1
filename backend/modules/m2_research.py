@@ -4,6 +4,7 @@ import json
 import time
 import requests
 from typing import Dict, Any, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed   # ✅ YENİ
 
 try:
     from google import genai
@@ -21,7 +22,6 @@ except ImportError:
     TAVILY_KEY     = os.getenv("TAVILY_KEY")
     SERPER_KEY     = os.getenv("SERPER_KEY")
 
-# ✅ DÜZƏLİŞ 1: URL-i None ilə birləşdirmə — tamamilə silindi (istifadə olunmurdu)
 TAVILY_API_URL = "https://api.tavily.com/search"
 SERPER_API_URL = "https://google.serper.dev/search"
 
@@ -34,7 +34,7 @@ def validate_api_keys() -> Dict[str, bool]:
     }
 
 
-def search_with_tavily(query: str, retries: int = 2) -> Optional[Dict]:
+def search_with_tavily(query: str, retries: int = 1) -> Optional[Dict]:   # ✅ retries: 2→1
     if not TAVILY_KEY:
         return None
     for attempt in range(retries):
@@ -42,19 +42,17 @@ def search_with_tavily(query: str, retries: int = 2) -> Optional[Dict]:
             resp = requests.post(
                 TAVILY_API_URL,
                 headers={"Authorization": f"Bearer {TAVILY_KEY}", "Content-Type": "application/json"},
-                json={"query": query, "search_depth": "advanced", "max_results": 6},
-                timeout=25,
+                json={"query": query, "search_depth": "basic", "max_results": 5},   # ✅ advanced→basic
+                timeout=10,   # ✅ 25→10
             )
             if resp.status_code == 200:
                 return resp.json()
-            time.sleep(1)
         except Exception as e:
             print(f"Tavily exception: {e}")
-            time.sleep(1)
     return None
 
 
-def search_with_serper(query: str, retries: int = 2) -> Optional[Dict]:
+def search_with_serper(query: str, retries: int = 1) -> Optional[Dict]:   # ✅ retries: 2→1
     if not SERPER_KEY:
         return None
     for attempt in range(retries):
@@ -62,15 +60,13 @@ def search_with_serper(query: str, retries: int = 2) -> Optional[Dict]:
             resp = requests.post(
                 SERPER_API_URL,
                 headers={"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"},
-                json={"q": query, "num": 6},
-                timeout=25,
+                json={"q": query, "num": 5},
+                timeout=10,   # ✅ 25→10
             )
             if resp.status_code == 200:
                 return resp.json()
-            time.sleep(1)
         except Exception as e:
             print(f"Serper exception: {e}")
-            time.sleep(1)
     return None
 
 
@@ -86,14 +82,14 @@ def extract_search_text(search_result: Optional[Dict]) -> str:
         return "Heç bir nəticə tapılmadı."
     parts = []
     if "results" in search_result:
-        for item in search_result["results"][:6]:
+        for item in search_result["results"][:5]:
             t = item.get("title", "")
             s = item.get("content", item.get("snippet", ""))
             if t: parts.append(f"Başlıq: {t}")
             if s: parts.append(f"Məzmun: {s}")
             parts.append("---")
     elif "organic" in search_result:
-        for item in search_result["organic"][:6]:
+        for item in search_result["organic"][:5]:
             t = item.get("title", "")
             s = item.get("snippet", "")
             if t: parts.append(f"Başlıq: {t}")
@@ -142,7 +138,6 @@ def _empty_result(warning: str = None, error: str = None) -> Dict:
 
 
 def calculate_m2_guveni(result: Dict) -> float:
-    """0-1 aralığında qaytarır. M4 *10 edib 0-10 göstərəcək."""
     confs = [
         float(v["confidence"])
         for k, v in result.items()
@@ -185,13 +180,11 @@ QAYDALAR (MÜTLƏQ):
 
 def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
     if not GENAI_AVAILABLE:
-        raise ImportError("google-genai quraşdırılmayıb. 'pip install google-genai' edin.")
+        raise ImportError("google-genai quraşdırılmayıb.")
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY tapılmadı.")
 
-    # ✅ DÜZƏLİŞ 2: Model adını config-dən al, fallback ilə
     model_name = MODEL_M2 or "gemini-2.5-flash-preview-04-17"
-
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     user_prompt = f"""
@@ -287,11 +280,47 @@ Yalnız aşağıdakı JSON strukturunu qaytar:
         raise Exception(f"Gemini API xətası: {str(e)}")
 
 
+# ✅ YENİ: Paralel axtarış funksiyası
+def run_searches_parallel(queries: List[str]) -> tuple[str, int]:
+    """
+    Bütün sorğuları eyni anda işlədir.
+    6 ardıcıl axtarış (~60s) → 6 paralel axtarış (~10-15s)
+    """
+    results: Dict[str, str] = {}
+
+    def _search_one(q: str) -> tuple[str, str]:
+        res  = search_web(q)
+        text = extract_search_text(res)
+        print(f"Axtarış tamamlandı: {q[:40]}...")
+        return q, text
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(_search_one, q): q for q in queries}
+        for future in as_completed(futures, timeout=25):   # max 25s gözlə
+            try:
+                q, text = future.result()
+                results[q] = text
+            except Exception as e:
+                q = futures[future]
+                print(f"Axtarış xətası ({q[:30]}): {e}")
+                results[q] = "Heç bir nəticə tapılmadı."
+
+    # Birləşdir, sıranı qoru
+    combined = ""
+    successful = 0
+    for q in queries:
+        text = results.get(q, "Heç bir nəticə tapılmadı.")
+        if text != "Heç bir nəticə tapılmadı.":
+            successful += 1
+        combined += f"\n=== SORĞU: {q} ===\n{text}\n"
+
+    return combined, successful
+
+
 def run_m2(parser_json: Dict) -> Dict:
     team1 = parser_json.get("team1", "Unknown")
     team2 = parser_json.get("team2", "Unknown")
 
-    # ✅ DÜZƏLİŞ 3: Import xətasını burada tut, modul səviyyəsində yox
     if not GENAI_AVAILABLE:
         return _empty_result(error="google-genai quraşdırılmayıb.")
     if not GEMINI_API_KEY:
@@ -310,15 +339,9 @@ def run_m2(parser_json: Dict) -> Dict:
         f"{team2} recent results last 5 matches",
     ]
 
-    all_search_text = ""
-    successful = 0
-    for q in queries:
-        print(f"Axtarış: {q}")
-        res  = search_web(q)
-        text = extract_search_text(res)
-        if text != "Heç bir nəticə tapılmadı.":
-            successful += 1
-        all_search_text += f"\n=== SORĞU: {q} ===\n{text}\n"
+    # ✅ Paralel axtarış — əvvəl ardıcıl idi
+    all_search_text, successful = run_searches_parallel(queries)
+    print(f"Axtarış tamamlandı: {successful}/{len(queries)} uğurlu")
 
     if successful == 0:
         return _empty_result(warning="Heç bir axtarış nəticəsi tapılmadı.")
@@ -330,7 +353,7 @@ def run_m2(parser_json: Dict) -> Dict:
 
         real_count    = sum(1 for k, v in result.items() if isinstance(v, dict) and v.get("status") == "real")
         missing_count = sum(1 for k, v in result.items() if isinstance(v, dict) and v.get("status") == "tapılmadı")
-        print(f"M2 güvən: {result['m2_guveni']:.3f} (0-1) | Real: {real_count} | Tapılmadı: {missing_count}")
+        print(f"M2 güvən: {result['m2_guveni']:.3f} | Real: {real_count} | Tapılmadı: {missing_count}")
 
         if missing_count > 4:
             result["m2_warning"] = f"{missing_count} kateqoriyada real məlumat tapılmadı."
