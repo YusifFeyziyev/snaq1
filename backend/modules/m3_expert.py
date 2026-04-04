@@ -8,7 +8,7 @@ try:
     from config import GROQ_KEY_M3, MODEL_M3
 except ImportError:
     GROQ_KEY_M3 = os.getenv("GROQ_KEY_M3")
-    MODEL_M3 = os.getenv("MODEL_M3", "llama-3.3-70b-versatile")
+    MODEL_M3    = os.getenv("MODEL_M3", "llama-3.3-70b-versatile")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -23,18 +23,35 @@ def get_m2_field(m2_data: Dict, key: str, subkey: str = "value", min_conf: float
         return None
     if field.get("status") == "tapılmadı":
         return None
-    conf = field.get("confidence", 0.0)
-    if conf < min_conf:
+    if field.get("confidence", 0.0) < min_conf:
         return None
     return field.get(subkey)
 
 
 def count_real_fields(m2_data: Dict) -> int:
-    count = 0
-    for v in m2_data.values():
-        if isinstance(v, dict) and v.get("status") == "real":
-            count += 1
-    return count
+    return sum(1 for v in m2_data.values()
+               if isinstance(v, dict) and v.get("status") == "real")
+
+
+# ─────────────────────────────────────────
+#  ✅ DÜZƏLİŞ 1: H2H stats-dan ev/qonaq qalibiyyəti çıxar
+#  Əvvəl: parser_json.get("h2h", {}).get("home_wins") → həmişə None
+#  İndi: h2h_stats.matches[] siyahısından hesabla
+# ─────────────────────────────────────────
+
+def parse_h2h_wins(parser_json: Dict):
+    """h2h_stats.matches[] siyahısından ev/qonaq qalibiyyətlərini hesabla"""
+    h2h_stats = parser_json.get("h2h_stats", {})
+    matches   = h2h_stats.get("matches", [])
+    if not matches:
+        return 0, 0
+    home_wins = sum(1 for m in matches
+                    if isinstance(m, dict)
+                    and (m.get("home_goals") or 0) > (m.get("away_goals") or 0))
+    away_wins = sum(1 for m in matches
+                    if isinstance(m, dict)
+                    and (m.get("away_goals") or 0) > (m.get("home_goals") or 0))
+    return home_wins, away_wins
 
 
 # ─────────────────────────────────────────
@@ -92,23 +109,11 @@ def hesabla_carpanlar(parser_json: Dict, m2_data: Dict) -> Dict:
         "hakim_tesiri":          1.0,
         "heyat_derinliyi_ev":    1.0,
         "heyat_derinliyi_qonaq": 1.0,
-        "psixoloji_ustunluk":    1.0
+        "psixoloji_ustunluk":    1.0,
     }
 
     # --- MOTİVASİYA ---
-    pos1 = t1.get("league_position")
-    pos2 = t2.get("league_position")
-
-    def motivasiya_carpani(pos):
-        if pos is None:  return 1.0
-        if pos <= 3:     return 1.15
-        if pos <= 6:     return 1.08
-        if pos <= 14:    return 1.0
-        return 1.12
-
-    carpanlar["motivasiya_ev"]    = motivasiya_carpani(pos1)
-    carpanlar["motivasiya_qonaq"] = motivasiya_carpani(pos2)
-
+    # ✅ DÜZƏLİŞ 2: league_position parser-dən gəlmirsə M2-dən al
     mot_ev  = get_m2_field(m2_data, "motivation", "home_motivation", 0.6)
     mot_qon = get_m2_field(m2_data, "motivation", "away_motivation", 0.6)
     mot_map = {"çox yüksək": 1.15, "yüksək": 1.08, "orta": 1.0, "aşağı": 0.88, "yox": 0.82}
@@ -116,14 +121,24 @@ def hesabla_carpanlar(parser_json: Dict, m2_data: Dict) -> Dict:
     if mot_qon and mot_qon in mot_map: carpanlar["motivasiya_qonaq"] = mot_map[mot_qon]
 
     # --- YORĞUNLUQ ---
+    # ✅ DÜZƏLİŞ 3: days_since_last_match M2-dən al (parser göndərmir)
+    days1 = t1.get("days_since_last_match") or \
+            get_m2_field(m2_data, "fatigue", "days_since_last_match_home", 0.5)
+    days2 = t2.get("days_since_last_match") or \
+            get_m2_field(m2_data, "fatigue", "days_since_last_match_away", 0.5)
+
     def yorgunluq_carpani(days):
         if days is None: return 1.0
-        if days <= 3:    return 0.88
-        if days <= 5:    return 0.94
+        try:
+            d = int(days)
+        except (TypeError, ValueError):
+            return 1.0
+        if d <= 3: return 0.88
+        if d <= 5: return 0.94
         return 1.0
 
-    carpanlar["yorgunluq_ev"]    = yorgunluq_carpani(t1.get("days_since_last_match"))
-    carpanlar["yorgunluq_qonaq"] = yorgunluq_carpani(t2.get("days_since_last_match"))
+    carpanlar["yorgunluq_ev"]    = yorgunluq_carpani(days1)
+    carpanlar["yorgunluq_qonaq"] = yorgunluq_carpani(days2)
 
     # --- HEYƏT DƏRİNLİYİ ---
     inj = m2_data.get("injuries", {})
@@ -137,20 +152,17 @@ def hesabla_carpanlar(parser_json: Dict, m2_data: Dict) -> Dict:
         elif absent_away >= 2: carpanlar["heyat_derinliyi_qonaq"] = 0.90
         elif absent_away == 1: carpanlar["heyat_derinliyi_qonaq"] = 0.95
 
-    # ✅ DÜZƏLİŞ 3: "severity" → "foul_sensitivity" (M2 strukturuna uyğun)
-    # Əvvəl: get_m2_field(m2_data, "referee", "severity", 0.6)
-    # Problem: M2 "severity" yox, "foul_sensitivity" qaytarır → həmişə None olurdu
+    # --- HAKİM ---
     ref_sensitivity = get_m2_field(m2_data, "referee", "foul_sensitivity", 0.6)
     sev_map = {"yüksək": 1.12, "orta": 1.0, "aşağı": 0.88}
     if ref_sensitivity and ref_sensitivity in sev_map:
         carpanlar["hakim_tesiri"] = sev_map[ref_sensitivity]
 
     # --- PSİXOLOJİ ÜSTÜNLÜK ---
-    h2h = parser_json.get("h2h", {})
-    h2h_ev  = h2h.get("home_wins", 0)
-    h2h_qon = h2h.get("away_wins", 0)
-    if h2h_ev  > h2h_qon + 1: carpanlar["psixoloji_ustunluk"] = 1.06
-    elif h2h_qon > h2h_ev + 1: carpanlar["psixoloji_ustunluk"] = 0.94
+    # ✅ DÜZƏLİŞ 4: h2h_stats.matches[]-dan hesabla
+    h2h_ev, h2h_qon = parse_h2h_wins(parser_json)
+    if   h2h_ev  > h2h_qon + 1: carpanlar["psixoloji_ustunluk"] = 1.06
+    elif h2h_qon > h2h_ev  + 1: carpanlar["psixoloji_ustunluk"] = 0.94
 
     return {k: round(v, 3) for k, v in carpanlar.items()}
 
@@ -159,7 +171,8 @@ def hesabla_carpanlar(parser_json: Dict, m2_data: Dict) -> Dict:
 #  FLAGLƏR
 # ─────────────────────────────────────────
 
-def hesabla_flags(parser_json: Dict, m2_data: Dict, tip_ev: str, tip_qonaq: str) -> List[str]:
+def hesabla_flags(parser_json: Dict, m2_data: Dict,
+                  tip_ev: str, tip_qonaq: str) -> List[str]:
     flags = []
     t1 = parser_json.get("team1_stats", {})
     t2 = parser_json.get("team2_stats", {})
@@ -172,13 +185,16 @@ def hesabla_flags(parser_json: Dict, m2_data: Dict, tip_ev: str, tip_qonaq: str)
         if len(inj.get("home_absent", [])) >= 4: flags.append("KRİTİK_İTKİ_EV")
         if len(inj.get("away_absent", [])) >= 4: flags.append("KRİTİK_İTKİ_QONAQ")
 
-    days1 = t1.get("days_since_last_match")
-    days2 = t2.get("days_since_last_match")
-    if days1 is not None and days1 <= 3: flags.append("YORĞUNLUQ_EV")
-    if days2 is not None and days2 <= 3: flags.append("YORĞUNLUQ_QONAQ")
-
-    derby = get_m2_field(m2_data, "match_context", "is_derby", 0.5)
-    if derby is True: flags.append("DERBY")
+    # ✅ DÜZƏLİŞ 5: days M2-dən də al
+    days1 = t1.get("days_since_last_match") or \
+            get_m2_field(m2_data, "fatigue", "days_since_last_match_home", 0.5)
+    days2 = t2.get("days_since_last_match") or \
+            get_m2_field(m2_data, "fatigue", "days_since_last_match_away", 0.5)
+    try:
+        if days1 is not None and int(days1) <= 3: flags.append("YORĞUNLUQ_EV")
+        if days2 is not None and int(days2) <= 3: flags.append("YORĞUNLUQ_QONAQ")
+    except (TypeError, ValueError):
+        pass
 
     return flags
 
@@ -189,21 +205,17 @@ def hesabla_flags(parser_json: Dict, m2_data: Dict, tip_ev: str, tip_qonaq: str)
 
 def hesabla_m3_guveni(m2_data: Dict, flags: List[str], carpanlar: Dict) -> float:
     real_count = count_real_fields(m2_data)
-    m2_bal = min(4.0, real_count * 0.85)          # artırıldı
+    m2_bal     = min(4.0, real_count * 0.85)
 
-    ferg = sum(abs(v - 1.0) for v in carpanlar.values())
-    signal_bal = min(5.0, ferg * 4.5)             # bir az daha həssas
+    ferg       = sum(abs(v - 1.0) for v in carpanlar.values())
+    signal_bal = min(5.0, ferg * 4.5)
 
     zid_bal = 3.5
-    if "BUS_STOP_QONAQ" in flags and "YORĞUNLUQ_EV" in flags:
-        zid_bal = 2.0
-    if len(flags) > 4:
-        zid_bal = 1.5
-    if len(flags) >= 6:
-        zid_bal = 1.0
+    if "BUS_STOP_QONAQ" in flags and "YORĞUNLUQ_EV" in flags: zid_bal = 2.0
+    if len(flags) > 4:  zid_bal = 1.5
+    if len(flags) >= 6: zid_bal = 1.0
 
-    total = m2_bal + signal_bal + zid_bal
-    return round(min(10.0, total), 1)   # 1 rəqəm kifayətdir
+    return round(min(10.0, m2_bal + signal_bal + zid_bal), 1)
 
 
 # ─────────────────────────────────────────
@@ -219,28 +231,25 @@ def build_prompt(team1: str, team2: str, parser_json: Dict,
 
     m2_real = {
         k: v for k, v in m2_data.items()
-        if isinstance(v, dict) and v.get("status") == "real" and v.get("confidence", 0) >= 0.6
+        if isinstance(v, dict)
+        and v.get("status") == "real"
+        and v.get("confidence", 0) >= 0.6
     }
 
     system = """Sən peşəkar futbol analitikisən. Sənə statistika, taktiki analiz və araşdırma nəticələri veriləcək.
 Yalnız verilən dataya əsaslan. Uydurma yazma. Hər sahə üçün confidence (0.0-1.0) ver.
 Yalnız JSON qaytar, heç bir izah yazma."""
 
-    # ✅ DÜZƏLİŞ 2: {flags} → json.dumps(flags) — Python list invalid JSON idi
-    # Əvvəl: "flags": {flags}  → ["FLAG1", "FLAG2"] kimi Python repr yazırdı
-    # İndi: json.dumps istifadə et → düzgün JSON array
     user = f"""Oyun: {team1} (ev) vs {team2} (qonaq)
 
 --- STATİSTİKA ---
 Ev qol vurdu: {t1.get('avg_goals_scored', 'N/A')} | buraxdı: {t1.get('avg_goals_conceded', 'N/A')}
 Ev hücum gücü: {t1.get('attack_strength', 'N/A')} | müdafiə: {t1.get('defense_strength', 'N/A')}
-Ev cədvəl sırası: {t1.get('league_position', 'N/A')}
-Ev son oyundan gün: {t1.get('days_since_last_match', 'N/A')}
+Ev ortalama corner: {t1.get('avg_corners_for', 'N/A')}
 
 Qonaq qol vurdu: {t2.get('avg_goals_scored', 'N/A')} | buraxdı: {t2.get('avg_goals_conceded', 'N/A')}
 Qonaq hücum gücü: {t2.get('attack_strength', 'N/A')} | müdafiə: {t2.get('defense_strength', 'N/A')}
-Qonaq cədvəl sırası: {t2.get('league_position', 'N/A')}
-Qonaq son oyundan gün: {t2.get('days_since_last_match', 'N/A')}
+Qonaq ortalama corner: {t2.get('avg_corners_for', 'N/A')}
 
 --- TAKTİKİ DNA ---
 Ev taktikası: {tip_ev}
@@ -256,23 +265,19 @@ Toqquşma effekti: tempo={toqqusma.get('tempo')}, qol={toqqusma.get('qol')}, cor
 --- M2 REAL MƏLUMATLAR (confidence >= 0.6) ---
 {json.dumps(m2_real, ensure_ascii=False) if m2_real else 'M2 real məlumat yoxdur'}
 
-Aşağıdakı JSON strukturunu doldur. Hər sahə üçün:
-- value: real dəyər (STRING olmalıdır, object yox)
-- confidence: 0.0-1.0
-- source: "m2_real" / "statistika" / "taktiki_analiz"
-
+Aşağıdakı JSON strukturunu doldur:
 {{
-  "tempo": {{"value": "yüksək/orta/aşağı", "confidence": 0.0, "source": ""}},
-  "taktika_ev": {{"value": "{tip_ev}", "confidence": 0.0, "source": "statistika"}},
-  "taktika_qonaq": {{"value": "{tip_qonaq}", "confidence": 0.0, "source": "statistika"}},
+  "tempo":          {{"value": "yüksək/orta/aşağı", "confidence": 0.0, "source": ""}},
+  "taktika_ev":     {{"value": "{tip_ev}", "confidence": 0.0, "source": "statistika"}},
+  "taktika_qonaq":  {{"value": "{tip_qonaq}", "confidence": 0.0, "source": "statistika"}},
   "dominant_teref": {{"value": "ev/qonaq/balanslı", "confidence": 0.0, "source": ""}},
-  "qol_veziyyeti": {{"value": "az/orta/çox", "confidence": 0.0, "source": ""}},
-  "btts_siqnal": {{"value": "güclü/orta/zəif", "confidence": 0.0, "source": ""}},
-  "corner_siqnal": {{"value": "yüksək/orta/aşağı", "confidence": 0.0, "source": ""}},
-  "kart_siqnal": {{"value": "yüksək/orta/aşağı", "confidence": 0.0, "source": ""}},
-  "hakim_tesiri": {{"value": "yüksək-kart/normal/az-kart", "confidence": 0.0, "source": ""}},
-  "oyun_oxunusu": {{"value": "2-3 cümlə oyun proqnozu", "confidence": 0.0, "source": ""}},
-  "kahin_cumlesi": {{"value": "1 konkret cümlə", "confidence": 0.0, "source": ""}},
+  "qol_veziyyeti":  {{"value": "az/orta/çox", "confidence": 0.0, "source": ""}},
+  "btts_siqnal":    {{"value": "güclü/orta/zəif", "confidence": 0.0, "source": ""}},
+  "corner_siqnal":  {{"value": "yüksək/orta/aşağı", "confidence": 0.0, "source": ""}},
+  "kart_siqnal":    {{"value": "yüksək/orta/aşağı", "confidence": 0.0, "source": ""}},
+  "hakim_tesiri":   {{"value": "yüksək-kart/normal/az-kart", "confidence": 0.0, "source": ""}},
+  "oyun_oxunusu":   {{"value": "2-3 cümlə oyun proqnozu", "confidence": 0.0, "source": ""}},
+  "kahin_cumlesi":  {{"value": "1 konkret cümlə", "confidence": 0.0, "source": ""}},
   "flags": {json.dumps(flags, ensure_ascii=False)},
   "carpanlar": {json.dumps(carpanlar, ensure_ascii=False)},
   "toqqusma_matrisi": {{
@@ -293,31 +298,31 @@ Aşağıdakı JSON strukturunu doldur. Hər sahə üçün:
 def get_default_m3_result(tip_ev="balanslı", tip_qonaq="balanslı",
                            carpanlar=None, flags=None, error=None) -> Dict:
     return {
-        "tempo":          {"value": "orta",      "confidence": 0.3, "source": "default"},
-        "taktika_ev":     {"value": tip_ev,       "confidence": 0.4, "source": "statistika"},
-        "taktika_qonaq":  {"value": tip_qonaq,    "confidence": 0.4, "source": "statistika"},
-        "dominant_teref": {"value": "balanslı",   "confidence": 0.3, "source": "default"},
-        "qol_veziyyeti":  {"value": "orta",        "confidence": 0.3, "source": "default"},
-        "btts_siqnal":    {"value": "orta",        "confidence": 0.3, "source": "default"},
-        "corner_siqnal":  {"value": "orta",        "confidence": 0.3, "source": "default"},
-        "kart_siqnal":    {"value": "orta",        "confidence": 0.3, "source": "default"},
-        "hakim_tesiri":   {"value": "normal",      "confidence": 0.3, "source": "default"},
+        "tempo":          {"value": "orta",     "confidence": 0.3, "source": "default"},
+        "taktika_ev":     {"value": tip_ev,      "confidence": 0.4, "source": "statistika"},
+        "taktika_qonaq":  {"value": tip_qonaq,   "confidence": 0.4, "source": "statistika"},
+        "dominant_teref": {"value": "balanslı",  "confidence": 0.3, "source": "default"},
+        "qol_veziyyeti":  {"value": "orta",       "confidence": 0.3, "source": "default"},
+        "btts_siqnal":    {"value": "orta",       "confidence": 0.3, "source": "default"},
+        "corner_siqnal":  {"value": "orta",       "confidence": 0.3, "source": "default"},
+        "kart_siqnal":    {"value": "orta",       "confidence": 0.3, "source": "default"},
+        "hakim_tesiri":   {"value": "normal",     "confidence": 0.3, "source": "default"},
         "oyun_oxunusu":   {"value": "Məlumat yetərsizdir.", "confidence": 0.2, "source": "default"},
         "kahin_cumlesi":  {"value": "Analiz üçün kifayət qədər data yoxdur.", "confidence": 0.2, "source": "default"},
         "flags":     flags or [],
         "carpanlar": carpanlar or {
             "motivasiya_ev": 1.0, "motivasiya_qonaq": 1.0,
-            "yorgunluq_ev": 1.0,  "yorgunluq_qonaq": 1.0,
-            "hakim_tesiri": 1.0,  "heyat_derinliyi_ev": 1.0,
-            "heyat_derinliyi_qonaq": 1.0, "psixoloji_ustunluk": 1.0
+            "yorgunluq_ev":  1.0, "yorgunluq_qonaq":  1.0,
+            "hakim_tesiri":  1.0, "heyat_derinliyi_ev": 1.0,
+            "heyat_derinliyi_qonaq": 1.0, "psixoloji_ustunluk": 1.0,
         },
         "toqqusma_matrisi": {
             "ev_hucum_qonaq_mudafie": "balanslı",
-            "qonaq_hucum_ev_mudafie": "balanslı"
+            "qonaq_hucum_ev_mudafie": "balanslı",
         },
         "critical_factors": [],
         "m3_guveni": 3.0,
-        "m3_error": error or "Default fallback"
+        "m3_error":  error or "Default fallback",
     }
 
 
@@ -331,16 +336,16 @@ def call_groq(system_prompt: str, user_prompt: str) -> Dict:
 
     headers = {
         "Authorization": f"Bearer {GROQ_KEY_M3}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
     payload = {
-        "model": MODEL_M3,
+        "model":    MODEL_M3,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt}
+            {"role": "user",   "content": user_prompt},
         ],
         "temperature": 0.15,
-        "max_tokens": 3000
+        "max_tokens":  3000,
     }
 
     response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=75)
@@ -370,11 +375,16 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
     print(f"M3 başladı: {team1} vs {team2}")
     print(f"M2 real məlumat sayı: {count_real_fields(m2_data)}")
 
+    # ✅ DÜZƏLİŞ 6: avg_corners → avg_corners_for (parser sahə adı)
     tip_ev = taktika_tipi_tey(
-        t1.get("avg_goals_scored"), t1.get("avg_goals_conceded"), t1.get("avg_corners")
+        t1.get("avg_goals_scored"),
+        t1.get("avg_goals_conceded"),
+        t1.get("avg_corners_for"),       # ← düzəldi
     )
     tip_qonaq = taktika_tipi_tey(
-        t2.get("avg_goals_scored"), t2.get("avg_goals_conceded"), t2.get("avg_corners")
+        t2.get("avg_goals_scored"),
+        t2.get("avg_goals_conceded"),
+        t2.get("avg_corners_for"),       # ← düzəldi
     )
 
     coach_home = get_m2_field(m2_data, "coach", "home_tactical_trend", 0.65)
@@ -389,37 +399,34 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
     try:
         system_p, user_p = build_prompt(
             team1, team2, parser_json, m2_data,
-            tip_ev, tip_qonaq, toqqusma, carpanlar, flags
+            tip_ev, tip_qonaq, toqqusma, carpanlar, flags,
         )
         result = call_groq(system_p, user_p)
 
         guveni = hesabla_m3_guveni(m2_data, flags, carpanlar)
-        result["m3_guveni"] = guveni
-        result["m3_guveni_value"] = guveni   # frontend üçün əlavə
+        result["m3_guveni"]       = guveni
+        result["m3_guveni_value"] = guveni
 
-        # ✅ DÜZƏLİŞ 1: [object Object] problemi
-        # Əvvəl: frontend result.tempo → {"value":"orta",...} → [object Object]
-        # İndi: _flat sahələr əlavə et → frontend result.tempo_value istifadə edə bilər
-        # Həm də mövcud object strukturu saxlanılır (M4 üçün lazımdır)
-        flat_fields = ["tempo", "taktika_ev", "taktika_qonaq", "dominant_teref",
-                       "qol_veziyyeti", "btts_siqnal", "corner_siqnal",
-                       "kart_siqnal", "hakim_tesiri", "oyun_oxunusu", "kahin_cumlesi"]
+        flat_fields = [
+            "tempo", "taktika_ev", "taktika_qonaq", "dominant_teref",
+            "qol_veziyyeti", "btts_siqnal", "corner_siqnal",
+            "kart_siqnal", "hakim_tesiri", "oyun_oxunusu", "kahin_cumlesi",
+        ]
         for field in flat_fields:
             if field in result and isinstance(result[field], dict):
-                # Flat versiya: result["tempo_value"] = "orta"
                 result[f"{field}_value"] = result[field].get("value", "—")
 
         result.setdefault("flags", flags)
-        result["carpanlar"] = carpanlar  # Groq uydurmasın deyə override et
+        result["carpanlar"] = carpanlar
 
-        print(f"M3 güvəni: {guveni}/10")
+        print(f"M3 güvəni: {guveni}/10 | Taktika: {tip_ev} vs {tip_qonaq}")
         return result
 
     except Exception as e:
         print(f"M3 xətası: {e}")
         return get_default_m3_result(
             tip_ev=tip_ev, tip_qonaq=tip_qonaq,
-            carpanlar=carpanlar, flags=flags, error=str(e)
+            carpanlar=carpanlar, flags=flags, error=str(e),
         )
 
 
@@ -429,37 +436,46 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
 
 if __name__ == "__main__":
     test_parser = {
-        "team1": "Rayo Vallecano",
-        "team2": "Elche",
+        "team1": "Inter Milan",
+        "team2": "AS Roma",
         "team1_stats": {
-            "attack_strength": 1.12, "defense_strength": 1.08,
-            "avg_goals_scored": 1.41, "avg_goals_conceded": 1.35,
-            "avg_corners": 5.2, "league_position": 12, "days_since_last_match": 6
+            "attack_strength": 1.93, "defense_strength": 0.76,
+            "avg_goals_scored": 2.60, "avg_goals_conceded": 0.87,
+            "avg_corners_for": 7.40,
         },
         "team2_stats": {
-            "attack_strength": 0.95, "defense_strength": 1.22,
-            "avg_goals_scored": 1.18, "avg_goals_conceded": 1.47,
-            "avg_corners": 4.8, "league_position": 19, "days_since_last_match": 4
+            "attack_strength": 0.98, "defense_strength": 0.81,
+            "avg_goals_scored": 1.13, "avg_goals_conceded": 0.93,
+            "avg_corners_for": 4.27,
         },
-        "h2h": {"home_wins": 3, "draws": 1, "away_wins": 1}
+        "h2h_stats": {
+            "matches": [
+                {"home_goals": 0, "away_goals": 1},
+                {"home_goals": 0, "away_goals": 1},
+                {"home_goals": 0, "away_goals": 1},
+                {"home_goals": 4, "away_goals": 2},
+                {"home_goals": 1, "away_goals": 0},
+            ]
+        },
     }
     test_m2 = {
         "referee": {
-            "name": "Jesus Gil Manzano", "foul_sensitivity": "yüksək",
-            "status": "real", "confidence": 0.85
+            "name": "Davide Massa", "foul_sensitivity": "orta",
+            "status": "real", "confidence": 0.80,
         },
         "injuries": {
-            "home_absent": ["Bebé"], "away_absent": ["Boyé", "Fidel"],
-            "status": "real", "confidence": 0.80
+            "home_absent": [], "away_absent": [],
+            "status": "real", "confidence": 0.70,
         },
         "motivation": {
-            "home_motivation": "orta", "away_motivation": "çox yüksək",
-            "status": "real", "confidence": 0.75
+            "home_motivation": "yüksək", "away_motivation": "orta",
+            "status": "real", "confidence": 0.75,
         },
-        "coach": {
-            "home_tactical_trend": "pressing", "away_tactical_trend": "kilid-kontra",
-            "status": "real", "confidence": 0.70
-        }
+        "fatigue": {
+            "days_since_last_match_home": 6,
+            "days_since_last_match_away": 7,
+            "status": "real", "confidence": 0.70,
+        },
     }
 
     try:
