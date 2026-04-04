@@ -6,7 +6,6 @@ import io
 import traceback
 from typing import Dict, Any
 
-# Windows PowerShell ucun stdout/stderr-i zorla UTF-8 et
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
@@ -18,6 +17,22 @@ except ImportError:
     raise ImportError("'pip install requests' edin.")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# ====================== LİQ ORTALAMA VERİTABANI ======================
+LEAGUE_AVERAGES = {
+    "Serie A":        {"home": 1.35, "away": 1.15, "total": 2.44, "corners": 9.5, "cards": 5.2, "fouls": 22.0, "offsides": 4.1, "throwins": 39.0, "sot": 8.5, "penalties": 0.35},
+    "Premier League": {"home": 1.55, "away": 1.25, "total": 2.80, "corners": 9.8, "cards": 4.8, "fouls": 21.0, "offsides": 3.9, "throwins": 40.0, "sot": 8.7, "penalties": 0.40},
+    "La Liga":        {"home": 1.45, "away": 1.20, "total": 2.65, "corners": 9.2, "cards": 5.8, "fouls": 23.0, "offsides": 4.3, "throwins": 38.0, "sot": 8.3, "penalties": 0.38},
+    "Bundesliga":     {"home": 1.65, "away": 1.35, "total": 3.00, "corners": 9.6, "cards": 4.5, "fouls": 20.0, "offsides": 4.0, "throwins": 38.5, "sot": 9.0, "penalties": 0.42},
+    "Ligue 1":        {"home": 1.40, "away": 1.15, "total": 2.55, "corners": 8.8, "cards": 5.5, "fouls": 22.5, "offsides": 4.2, "throwins": 37.5, "sot": 8.0, "penalties": 0.36},
+    "default":        {"home": 1.40, "away": 1.15, "total": 2.55, "corners": 9.2, "cards": 5.0, "fouls": 22.0, "offsides": 4.0, "throwins": 39.0, "sot": 8.5, "penalties": 0.35},
+}
+
+def get_league_avg(league: str) -> Dict:
+    for key in LEAGUE_AVERAGES:
+        if key.lower() in (league or "").lower():
+            return LEAGUE_AVERAGES[key]
+    return LEAGUE_AVERAGES["default"]
 
 
 def safe_str(text) -> str:
@@ -70,61 +85,124 @@ class SoccerStatsParser:
             json_str = match.group(1)
             try:
                 return json.loads(json_str)
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
                 try:
                     fixed = re.sub(r"'", '"', json_str)
                     return json.loads(fixed)
-                except Exception as e:
+                except Exception:
                     pass
-                raise ValueError(f"JSON parse xetasi: {safe_str(e)}\nMetn: {json_str[:200]}")
+                raise ValueError(f"JSON parse xetasi. Metn: {json_str[:200]}")
         raise ValueError("JSON obyekti tapilmadi.")
 
     def _build_prompt(self, raw_text: str) -> str:
         return (
-            "Sen futbol statistikasini tehlil eden bir parsersen. "
-            "Asagida verilmis metni tehlil ederek asagida gosterilen JSON strukturuna cevir. "
-            "Hec bir elave metn yazma, yalniz JSON obyekti qaytar.\n\n"
-            "JSON strukturu:\n"
+            "You are a football statistics parser. Analyze the text below and return ONLY a JSON object.\n"
+            "Rules:\n"
+            "- attack_strength = team's avg goals scored / league home avg (for home team) or league away avg (for away team)\n"
+            "- defense_strength = team's avg goals conceded / opponent's league avg\n"
+            "- If exact data not found, use reasonable estimates based on context\n"
+            "- data_confidence: 0.0-1.0 based on how much data was available (0.9 if full stats, 0.5 if partial)\n"
+            "- All numeric fields must be float, not null\n\n"
+            "Return this exact JSON structure:\n"
             "{\n"
-            '  "ev_sahibi": "string",\n'
-            '  "qonaq": "string",\n'
-            '  "lig": "string",\n'
-            '  "tarix": "YYYY-MM-DD",\n'
-            '  "ortalama_qol_ev": 0.0,\n'
-            '  "ortalama_qol_qonaq": 0.0,\n'
-            '  "ortalama_korner_ev": 0.0,\n'
-            '  "ortalama_korner_qonaq": 0.0,\n'
-            '  "ortalama_sot_ev": 0.0,\n'
-            '  "ortalama_sot_qonaq": 0.0,\n'
-            '  "ortalama_faul_ev": 0.0,\n'
-            '  "ortalama_faul_qonaq": 0.0,\n'
-            '  "ortalama_sari_kart_ev": 0.0,\n'
-            '  "ortalama_sari_kart_qonaq": 0.0,\n'
-            '  "ortalama_qirmizi_kart_ev": 0.0,\n'
-            '  "ortalama_qirmizi_kart_qonaq": 0.0,\n'
-            '  "ortalama_ofsayt_ev": 0.0,\n'
-            '  "ortalama_ofsayt_qonaq": 0.0,\n'
-            '  "ortalama_aut_ev": 0.0,\n'
-            '  "ortalama_aut_qonaq": 0.0,\n'
-            '  "ortalama_qapidan_zerbe_ev": 0.0,\n'
-            '  "ortalama_qapidan_zerbe_qonaq": 0.0,\n'
-            '  "ortalama_penalti_ev": 0.0,\n'
-            '  "ortalama_penalti_qonaq": 0.0,\n'
-            '  "btts_faiz": 0.0,\n'
-            '  "over_1_5_faiz": 0.0,\n'
-            '  "over_2_5_faiz": 0.0,\n'
-            '  "over_3_5_faiz": 0.0,\n'
-            '  "h2h_qeyd": "string",\n'
-            '  "son_form_ev": "string",\n'
-            '  "son_form_qonaq": "string",\n'
-            '  "ev_qol_sayisi_son_5": 0,\n'
-            '  "qonaq_qol_sayisi_son_5": 0,\n'
-            '  "ev_buraxilan_qol_son_5": 0,\n'
-            '  "qonaq_buraxilan_qol_son_5": 0\n'
+            '  "team1": "string",\n'
+            '  "team2": "string",\n'
+            '  "league": "string",\n'
+            '  "date": "YYYY-MM-DD",\n'
+            '  "team1_stats": {\n'
+            '    "attack_strength": 1.0,\n'
+            '    "defense_strength": 1.0,\n'
+            '    "avg_goals_scored": 0.0,\n'
+            '    "avg_goals_conceded": 0.0,\n'
+            '    "avg_corners_for": 0.0,\n'
+            '    "avg_corners_against": 0.0,\n'
+            '    "avg_sot_for": 0.0,\n'
+            '    "avg_sot_against": 0.0,\n'
+            '    "avg_fouls_committed": 0.0,\n'
+            '    "avg_fouls_suffered": 0.0,\n'
+            '    "avg_cards_per_match": 0.0,\n'
+            '    "avg_offsides": 0.0,\n'
+            '    "avg_throwins": 0.0,\n'
+            '    "avg_penalties_for": 0.0,\n'
+            '    "data_confidence": 0.5\n'
+            '  },\n'
+            '  "team2_stats": {\n'
+            '    "attack_strength": 1.0,\n'
+            '    "defense_strength": 1.0,\n'
+            '    "avg_goals_scored": 0.0,\n'
+            '    "avg_goals_conceded": 0.0,\n'
+            '    "avg_corners_for": 0.0,\n'
+            '    "avg_corners_against": 0.0,\n'
+            '    "avg_sot_for": 0.0,\n'
+            '    "avg_sot_against": 0.0,\n'
+            '    "avg_fouls_committed": 0.0,\n'
+            '    "avg_fouls_suffered": 0.0,\n'
+            '    "avg_cards_per_match": 0.0,\n'
+            '    "avg_offsides": 0.0,\n'
+            '    "avg_throwins": 0.0,\n'
+            '    "avg_penalties_for": 0.0,\n'
+            '    "data_confidence": 0.5\n'
+            '  },\n'
+            '  "h2h_stats": {\n'
+            '    "matches": [\n'
+            '      {"home_goals": 0, "away_goals": 0}\n'
+            '    ]\n'
+            '  }\n'
             "}\n\n"
-            f"Metn:\n{raw_text}\n\n"
-            "Yalniz JSON obyektini qaytar."
+            f"Text to analyze:\n{raw_text}\n\n"
+            "Return ONLY the JSON object, nothing else."
         )
+
+    def _inject_league_averages(self, result: Dict) -> Dict:
+        """Parser-in qaytardığı JSON-a lig ortalamalarını əlavə edir"""
+        league = result.get("league", "")
+        lg = get_league_avg(league)
+
+        for team_key in ["team1_stats", "team2_stats"]:
+            stats = result.get(team_key, {})
+            if not stats:
+                result[team_key] = {}
+                stats = result[team_key]
+
+            # Lig ortalamalarını əlavə et
+            stats.setdefault("league_home_avg_goals", lg["home"])
+            stats.setdefault("league_away_avg_goals", lg["away"])
+            stats.setdefault("league_avg_goals",      lg["total"])
+            stats.setdefault("league_avg_corners",    lg["corners"])
+            stats.setdefault("league_avg_cards",      lg["cards"])
+            stats.setdefault("league_avg_fouls",      lg["fouls"])
+            stats.setdefault("league_avg_offsides",   lg["offsides"])
+            stats.setdefault("league_avg_throwins",   lg["throwins"])
+            stats.setdefault("league_avg_sot",        lg["sot"])
+            stats.setdefault("league_avg_penalties",  lg["penalties"])
+
+            # Əsas dəyərlər sıfır və ya yoxdursa default qoy
+            stats.setdefault("attack_strength",     1.0)
+            stats.setdefault("defense_strength",    1.0)
+            stats.setdefault("avg_goals_scored",    lg["home"] if team_key == "team1_stats" else lg["away"])
+            stats.setdefault("avg_goals_conceded",  1.0)
+            stats.setdefault("avg_corners_for",     5.5 if team_key == "team1_stats" else 4.5)
+            stats.setdefault("avg_corners_against", 4.5 if team_key == "team1_stats" else 5.5)
+            stats.setdefault("avg_sot_for",         4.5)
+            stats.setdefault("avg_sot_against",     4.0)
+            stats.setdefault("avg_fouls_committed", 11.0)
+            stats.setdefault("avg_fouls_suffered",  11.0)
+            stats.setdefault("avg_cards_per_match", 2.5)
+            stats.setdefault("avg_offsides",        2.0)
+            stats.setdefault("avg_throwins",        19.5)
+            stats.setdefault("avg_penalties_for",   0.2)
+            stats.setdefault("data_confidence",     0.5)
+
+            # Sıfır dəyərləri düzəlt (LLM bəzən 0.0 qaytarır)
+            if stats.get("attack_strength", 0) <= 0:
+                stats["attack_strength"] = 1.0
+            if stats.get("defense_strength", 0) <= 0:
+                stats["defense_strength"] = 1.0
+
+        # h2h_stats yoxdursa boş əlavə et
+        result.setdefault("h2h_stats", {"matches": []})
+
+        return result
 
     def parse(self, raw_text: str) -> Dict[str, Any]:
         if not raw_text or not raw_text.strip():
@@ -132,13 +210,15 @@ class SoccerStatsParser:
 
         prompt = self._build_prompt(raw_text)
         messages = [
-            {"role": "system", "content": "Sen bir JSON parsersen. Yalniz JSON cixisi et."},
+            {"role": "system", "content": "You are a JSON parser for football statistics. Return only valid JSON."},
             {"role": "user", "content": prompt},
         ]
 
         try:
             content = self._call_api(messages)
-            return self._extract_json(content)
+            result = self._extract_json(content)
+            result = self._inject_league_averages(result)
+            return result
         except ConnectionError as e:
             if "rate limit" in str(e):
                 print("Rate limit askarlandi, key deyisdirilir...")
@@ -156,27 +236,19 @@ def parse_soccer_stats(raw_text: str) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     sample_text = (
-        "Manchester United vs Liverpool\n"
-        "Premier League\n"
-        "Son 5 oyun: United: QMBMQ, Liverpool: MQBMQ\n"
-        "United evde ortalama 1.8 qol atir, 1.1 buraxir.\n"
-        "Liverpool seferde ortalama 2.0 qol atir, 0.9 buraxir.\n"
-        "Over 2.5 faiz: 65%\n"
-        "BTTS faiz: 54%\n"
-        "Korner ortalama: United 5.3, Liverpool 6.1\n"
+        "Inter Milan vs AS Roma\n"
+        "Serie A, 5 April 2026\n"
+        "Inter Milan home: avg 2.60 goals scored, 0.87 conceded, 7.4 corners\n"
+        "AS Roma away: avg 1.13 goals scored, 0.93 conceded, 4.27 corners\n"
+        "Inter last 8: W5 D2 L1 | Roma last 8: W3 D2 L3\n"
+        "Over 2.5: 54% | BTTS: 46%\n"
+        "H2H: Inter won 8, Roma won 2, Draws 3 in last 13 matches\n"
     )
     try:
         result = parse_soccer_stats(sample_text)
-        output = json.dumps(result, indent=2, ensure_ascii=True)
-        sys.stdout.buffer.write(output.encode("utf-8") + b"\n")
+        output = json.dumps(result, indent=2, ensure_ascii=False)
+        print(output)
     except Exception as e:
-        print("=" * 50)
-        print("XETA BAS VERDI:")
-        print("=" * 50)
         tb_lines = traceback.format_exc().splitlines()
         for line in tb_lines:
             print(safe_str(line))
-        print("=" * 50)
-        print("Xeta novu :", type(e).__name__)
-        print("Xeta mesaji:", safe_str(e))
-        print("=" * 50)
