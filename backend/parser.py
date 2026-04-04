@@ -2,13 +2,13 @@
 import json
 import re
 import sys
-import os
+import io
+import traceback
 from typing import Dict, Any
 
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8')
-if hasattr(sys.stderr, 'reconfigure'):
-    sys.stderr.reconfigure(encoding='utf-8')
+# Windows PowerShell ucun stdout/stderr-i zorla UTF-8 et
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 from config import GROQ_KEYS_PARSER, MODEL_PARSER
 
@@ -18,6 +18,10 @@ except ImportError:
     raise ImportError("'pip install requests' edin.")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def safe_str(text) -> str:
+    return str(text).encode('ascii', errors='replace').decode('ascii')
 
 
 class SoccerStatsParser:
@@ -72,7 +76,7 @@ class SoccerStatsParser:
                     return json.loads(fixed)
                 except:
                     pass
-                raise ValueError(f"JSON parse xetasi: {e}\nMetn: {json_str[:200]}")
+                raise ValueError(f"JSON parse xetasi: {safe_str(e)}\nMetn: {json_str[:200]}")
         raise ValueError("JSON obyekti tapilmadi.")
 
     def _build_prompt(self, raw_text: str) -> str:
@@ -137,12 +141,12 @@ class SoccerStatsParser:
             return self._extract_json(content)
         except ConnectionError as e:
             if "rate limit" in str(e):
-                print("Rate limit askarlandı, key deyisdirilir...")
+                print("Rate limit askarlandi, key deyisdirilir...")
                 self._rotate_key()
                 return self.parse(raw_text)
             raise
         except Exception as e:
-            raise RuntimeError(f"Parser xetasi: {str(e)}")
+            raise RuntimeError(f"Parser xetasi: {safe_str(e)}")
 
 
 def parse_soccer_stats(raw_text: str) -> Dict[str, Any]:
@@ -163,8 +167,16 @@ if __name__ == "__main__":
     )
     try:
         result = parse_soccer_stats(sample_text)
-        # ensure_ascii=True: xususi herf olmadan ASCII formatinda yaz
         output = json.dumps(result, indent=2, ensure_ascii=True)
         sys.stdout.buffer.write(output.encode("utf-8") + b"\n")
     except Exception as e:
-        print("Test xetasi:", e)
+        print("=" * 50)
+        print("XETA BAS VERDI:")
+        print("=" * 50)
+        tb_lines = traceback.format_exc().splitlines()
+        for line in tb_lines:
+            print(safe_str(line))
+        print("=" * 50)
+        print("Xeta novu :", type(e).__name__)
+        print("Xeta mesaji:", safe_str(e))
+        print("=" * 50)
