@@ -99,39 +99,18 @@ def extract_search_text(search_result: Optional[Dict]) -> str:
 
 
 def safe_json_parse(text: str) -> Dict:
-    # 1. Markdown code block-u təmizlə
-    text = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
-    
-    # 2. İlk { dan son } -ə qədər al
-    start = text.find("{")
-    end   = text.rfind("}")
-    if start == -1 or end == -1:
-        print("JSON tapılmadı, fallback.")
-        return _empty_sections()
-    json_str = text[start:end+1]
-
-    # 3. Ümumi pozuntu düzəltmələri
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)   # trailing comma
-    json_str = re.sub(r"//[^\n]*", "", json_str)          # JS comments
-    json_str = re.sub(r"'", '"', json_str)                # tək dırnaq
-
     try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        print(f"JSON parse xətası: {e}")
-        
-        # 4. Son çarə: hissə-hissə yenidən qur
-        result = _empty_sections()
-        for key in result.keys():
-            pattern = rf'"{key}"\s*:\s*(\{{[^}}]*\}})'
-            match = re.search(pattern, json_str, re.DOTALL)
-            if match:
-                try:
-                    block = re.sub(r",\s*([}\]])", r"\1", match.group(1))
-                    result[key] = json.loads(block)
-                except:
-                    pass
-        return result
+        from json_repair import repair_json
+        text = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
+        repaired = repair_json(text)
+        result = json.loads(repaired)
+        # Gözlənilən açarlar varmı yoxla
+        if any(k in result for k in ["referee", "coach", "injuries"]):
+            return result
+        return _empty_sections()
+    except Exception as e:
+        print(f"JSON repair xətası: {e}")
+        return _empty_sections()
 
 
 def _empty_sections() -> Dict:
@@ -201,11 +180,17 @@ def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
         raise ImportError("google-genai quraşdırılmayıb.")
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY tapılmadı.")
+    
 
     model_name = MODEL_M2 or "gemini-2.5-flash-preview-04-17"
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     user_prompt = f"""
+
+content = response.text.strip()
+print(f"GEMINI RAW: {content[:300]}")  # ← bunu əlavə edin
+return safe_json_parse(content)
+
 {SYSTEM_PROMPT}
 
 Komandalar: {team1} vs {team2}
