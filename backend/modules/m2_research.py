@@ -175,7 +175,10 @@ QAYDALAR (MÜTLƏQ):
 3. ƏSLA uydurmaq, ehtimal etmək, ya da bil ki-dən istifadə etmə.
 4. Məlumat tapılıbsa status="real", confidence=0.7-0.95 qaytar.
 5. status="təxmin" istifadə etmə — ya "real", ya "tapılmadı".
-6. Yalnız aşağıdakı JSON strukturunu qaytar, heç bir əlavə mətn yazma."""
+6. Məşqçi adlarını (coach) mütləq axtarış nəticələrindən tap — Inter Milan üçün Simone Inzaghi kimi adlar ola bilər.
+7. Zədəli oyunçu siyahısını injury/suspended/doubtful sözlərinin yanındakı adlardan çıxar.
+8. Hakimi referee/arbitro/wasit sözlərinin yanındakı adlardan tap.
+9. Yalnız aşağıdakı JSON strukturunu qaytar, heç bir əlavə mətn yazma."""
 
 
 def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
@@ -334,13 +337,16 @@ def run_m2(parser_json: Dict) -> Dict:
     print(f"M2 başladı: {team1} vs {team2}")
 
     queries = [
-        f"{team1} {team2} referee 2025 2026",
-        f"{team1} {team2} injury report missing players",
-        f"{team1} {team2} predicted lineup formation",
-        f"{team1} {team2} match preview",
-        f"{team1} recent results last 5 matches",
-        f"{team2} recent results last 5 matches",
-    ]
+    f"{team1} vs {team2} Serie A referee appointed 2026",
+    f"{team1} {team2} injury news suspended players April 2026",
+    f"{team1} {team2} predicted starting lineup April 2026",
+    f"{team1} {team2} head to head preview betting tips",
+    f"{team1} last 5 matches results goals scored 2026",
+    f"{team2} last 5 matches results goals scored 2026",
+    f"{team1} coach tactics formation current season",
+    f"{team2} coach tactics formation current season",
+]
+
 
     # ✅ Paralel axtarış — əvvəl ardıcıl idi
     all_search_text, successful = run_searches_parallel(queries)
