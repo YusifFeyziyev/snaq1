@@ -102,9 +102,12 @@ def safe_json_parse(text: str) -> Dict:
     try:
         from json_repair import repair_json
         text = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
-        repaired = repair_json(text)
-        result = json.loads(repaired)
-        # Gözlənilən açarlar varmı yoxla
+        start = text.find("{")
+        end   = text.rfind("}")
+        if start == -1 or end == -1:
+            return _empty_sections()
+        raw = text[start:end+1]
+        result = json.loads(repair_json(raw))
         if any(k in result for k in ["referee", "coach", "injuries"]):
             return result
         return _empty_sections()
@@ -272,7 +275,6 @@ Yalnız aşağıdakı JSON strukturunu qaytar:
             config=types.GenerateContentConfig(
                 temperature=0.0,
                 max_output_tokens=2500,
-                response_mime_type="application/json",
             ),
         )
         content = response.text.strip()
