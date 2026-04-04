@@ -99,21 +99,39 @@ def extract_search_text(search_result: Optional[Dict]) -> str:
 
 
 def safe_json_parse(text: str) -> Dict:
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if match:
-        json_str = match.group(1)
-    else:
-        match = re.search(r"(\{.*\})", text, re.DOTALL)
-        json_str = match.group(1) if match else text.strip()
+    # 1. Markdown code block-u təmizlə
+    text = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
+    
+    # 2. İlk { dan son } -ə qədər al
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start == -1 or end == -1:
+        print("JSON tapılmadı, fallback.")
+        return _empty_sections()
+    json_str = text[start:end+1]
 
-    json_str = re.sub(r",\s*}", "}", json_str)
-    json_str = re.sub(r",\s*]", "]", json_str)
+    # 3. Ümumi pozuntu düzəltmələri
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)   # trailing comma
+    json_str = re.sub(r"//[^\n]*", "", json_str)          # JS comments
+    json_str = re.sub(r"'", '"', json_str)                # tək dırnaq
 
     try:
         return json.loads(json_str)
     except json.JSONDecodeError as e:
-        print(f"JSON parse xətası: {e}. Fallback istifadə edilir...")
-        return _empty_sections()
+        print(f"JSON parse xətası: {e}")
+        
+        # 4. Son çarə: hissə-hissə yenidən qur
+        result = _empty_sections()
+        for key in result.keys():
+            pattern = rf'"{key}"\s*:\s*(\{{[^}}]*\}})'
+            match = re.search(pattern, json_str, re.DOTALL)
+            if match:
+                try:
+                    block = re.sub(r",\s*([}\]])", r"\1", match.group(1))
+                    result[key] = json.loads(block)
+                except:
+                    pass
+        return result
 
 
 def _empty_sections() -> Dict:
