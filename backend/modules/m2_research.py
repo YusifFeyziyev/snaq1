@@ -190,9 +190,6 @@ def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
 
     user_prompt = f"""
 
-content = response.text.strip()
-print(f"GEMINI RAW: {content[:300]}")  # ← bunu əlavə edin
-return safe_json_parse(content)
 
 {SYSTEM_PROMPT}
 
@@ -278,6 +275,7 @@ Yalnız aşağıdakı JSON strukturunu qaytar:
             ),
         )
         content = response.text.strip()
+        print(f"GEMINI RAW: {content[:300]}")  # ← burda düzgündür
         return safe_json_parse(content)
 
     except Exception as e:
