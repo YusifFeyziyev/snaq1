@@ -1,7 +1,9 @@
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# .env root-dadır, backend/ yox
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")  # ← bunu əlavə et
 
 # ====================== GROQ API AÇARLARI ======================
 # Parser ucun bir nece Groq key-i (fallback ile)
