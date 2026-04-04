@@ -592,7 +592,7 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
   ctx.clearRect(0, 0, W, H);
 
   // Y grid
-  const yTicks = [-15, -10, -5, 0, 5, 10, 15].filter(v => v >= -numGames && v <= numGames);
+  const yTicks = [-15, -10, -5, 0, 5, 10, 15].filter(v => v >= -N && v <= N);
   yTicks.forEach(v => {
     const y = PAD.top + (1 - v / maxPts) * cH;
     ctx.beginPath();
