@@ -540,22 +540,22 @@ function nameToSeed(name) {
   return Math.abs(h);
 }
 
+// ── TRAYEKTORIYA ─────────────────────────
 function generateTrajectory(winProb, drawProb, teamName, numGames) {
   const rng = seededRng(nameToSeed(teamName));
-  let cum = 0;
-  const pts = [{ g: 0, pts: 0, cum: 0, result: "S" }]; // 0-dan başla
+  let y = 0;
+  const pts = [{ g: 0, y: 0, result: "S" }];
   for (let i = 0; i < numGames; i++) {
     const r = rng();
-    let result, gained;
-    if (r < winProb)                    { result = "W"; gained =  1; }
-    else if (r < winProb + drawProb)    { result = "D"; gained =  0; }
-    else                                { result = "L"; gained = -1; }
-    cum += gained;
-    pts.push({ g: i + 1, pts: gained, cum, result });
+    let result, dy;
+    if (r < winProb)                 { result = "W"; dy =  1; }
+    else if (r < winProb + drawProb) { result = "D"; dy =  0; }
+    else                             { result = "L"; dy = -1; }
+    y += dy;
+    pts.push({ g: i + 1, y, result });
   }
   return pts;
 }
-
 
 function drawTrajectoryChart(m1, team1, team2, m4) {
   const canvas = document.getElementById("trajectoryChart");
@@ -570,8 +570,8 @@ function drawTrajectoryChart(m1, team1, team2, m4) {
   if (drawProb > 1) drawProb /= 100;
 
   const N = 15;
-const homeTraj = generateTrajectory(homeWin, drawProb * 0.55, team1, N);
-const awayTraj = generateTrajectory(awayWin, drawProb * 0.45, team2, N);
+  const homeTraj = generateTrajectory(homeWin, drawProb * 0.55, team1, N);
+  const awayTraj = generateTrajectory(awayWin, drawProb * 0.45, team2, N);
 
   const dpr = window.devicePixelRatio || 1;
   const W   = canvas.offsetWidth || 800;
@@ -587,140 +587,135 @@ const awayTraj = generateTrajectory(awayWin, drawProb * 0.45, team2, N);
   const cW  = W - PAD.left - PAD.right;
   const cH  = H - PAD.top  - PAD.bottom;
 
-  const maxPts = N; // ±15
+  // Y range: min və max tap
+  const allY = [...homeTraj, ...awayTraj].map(p => p.y);
+  const minY = Math.min(...allY, -3);
+  const maxY = Math.max(...allY,  3);
+  const range = Math.max(maxY - minY, 6);
+  const padY  = range * 0.15;
+  const yLo   = minY - padY;
+  const yHi   = maxY + padY;
 
   ctx.clearRect(0, 0, W, H);
 
-  // Y grid
-  const yTicks = [-N, -10, -5, 0, 5, 10, N].filter(v => v >= -N && v <= N);
-  yTicks.forEach(v => {
-    const y = PAD.top + (1 - v / maxPts) * cH;
+  function getX(g) { return PAD.left + (g / N) * cW; }
+  function getY(y) { return PAD.top + (1 - (y - yLo) / (yHi - yLo)) * cH; }
+
+  // Sıfır xətti
+  const zeroY = getY(0);
+  ctx.beginPath();
+  ctx.moveTo(PAD.left, zeroY);
+  ctx.lineTo(PAD.left + cW, zeroY);
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Y ticks
+  const step = range <= 6 ? 1 : range <= 12 ? 2 : 5;
+  for (let v = Math.ceil(yLo); v <= Math.floor(yHi); v += step) {
+    const y = getY(v);
     ctx.beginPath();
     ctx.moveTo(PAD.left, y);
     ctx.lineTo(PAD.left + cW, y);
-    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx.strokeStyle = "rgba(255,255,255,0.04)";
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.fillStyle = "#64748b";
     ctx.font = "10px Segoe UI, sans-serif";
     ctx.textAlign = "right";
-    ctx.fillText(v, PAD.left - 6, y + 4);
-  });
+    ctx.fillText((v > 0 ? "+" : "") + v, PAD.left - 6, y + 4);
+  }
 
-  // X axis labels
-  [1, 5, 10, 15].forEach(g => {
-    const x = PAD.left + ((g - 1) / (N - 1)) * cW;
+  // X labels
+  [0, 5, 10, 15].forEach(g => {
+    const x = getX(g);
     ctx.fillStyle = "#64748b";
     ctx.font = "10px Segoe UI, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(`${g}`, x, PAD.top + cH + 16);
+    ctx.fillText(g === 0 ? "0" : `${g}`, x, PAD.top + cH + 16);
   });
 
-  // X axis title
+  // X axis label
   ctx.fillStyle = "#475569";
   ctx.font = "10px Segoe UI, sans-serif";
   ctx.textAlign = "center";
   ctx.fillText("Oyun №", PAD.left + cW / 2, PAD.top + cH + 28);
 
-  // Y axis title
+  // Y axis label
   ctx.save();
   ctx.translate(12, PAD.top + cH / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.fillStyle = "#475569";
   ctx.font = "10px Segoe UI, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Xal", 0, 0);
+  ctx.fillText("Forma", 0, 0);
   ctx.restore();
 
-  function getX(i) { return PAD.left + (i / N) * cW; }
-function getY(cum) { return PAD.top + (0.5 - cum / (N * 2)) * cH; }
-
   function drawLine(traj, lineColor) {
-    // Area fill
-    const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + cH);
-    grad.addColorStop(0, lineColor.replace(")", ",0.18)").replace("rgb", "rgba"));
-    grad.addColorStop(1, lineColor.replace(")", ",0.01)").replace("rgb", "rgba"));
-
-    ctx.beginPath();
-    traj.forEach((pt, i) => {
-      const x = getX(i);
-      const y = getY(pt.cum);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.lineTo(getX(N - 1), PAD.top + cH);
-    ctx.lineTo(getX(0), PAD.top + cH);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // Line
+    // Xətt — KƏSKİN (lineTo, heç bir curve yoxdur)
     ctx.beginPath();
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 2.5;
-    ctx.lineJoin = "round";
+    ctx.lineJoin = "miter";       // ← kəskin bucaq
+    ctx.lineCap  = "round";
     traj.forEach((pt, i) => {
-      const x = getX(i);
-      const y = getY(pt.cum);
+      const x = getX(pt.g);
+      const y = getY(pt.y);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
 
-    // Dots
-    traj.forEach((pt, i) => {
-      const x = getX(i);
-      const y = getY(pt.cum);
-      const dotColor = pt.result === "W" ? "#22c55e" : pt.result === "D" ? "#f59e0b" : "#ef4444";
+    // Nöqtələr — W/D/L rəngi
+    traj.slice(1).forEach(pt => {
+      const x = getX(pt.g);
+      const y = getY(pt.y);
+      const dotColor = pt.result === "W" ? "#22c55e"
+                     : pt.result === "D" ? "#f59e0b"
+                     : "#ef4444";
       ctx.beginPath();
       ctx.arc(x, y, 4, 0, Math.PI * 2);
       ctx.fillStyle = dotColor;
       ctx.fill();
       ctx.beginPath();
       ctx.arc(x, y, 4, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(0,0,0,0.4)";
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
       ctx.lineWidth = 1;
       ctx.stroke();
     });
   }
 
-  // Sıfır xətti
-const zeroY = getY(0);
-ctx.beginPath();
-ctx.moveTo(PAD.left, zeroY);
-ctx.lineTo(PAD.left + cW, zeroY);
-ctx.strokeStyle = "rgba(255,255,255,0.15)";
-ctx.lineWidth = 1.5;
-ctx.setLineDash([6, 4]);
-ctx.stroke();
-ctx.setLineDash([]); 
-
-  drawLine(homeTraj, "rgb(59,130,246)");
+  // Ev komandası üstdə olsun deyə əvvəl qonağı çək
   drawLine(awayTraj, "rgb(245,158,11)");
+  drawLine(homeTraj, "rgb(59,130,246)");
 
-  const homeEnd = homeTraj[homeTraj.length - 1].cum;
-  const awayEnd = awayTraj[awayTraj.length - 1].cum;
-  const diff = homeEnd - awayEnd;
+  // Legend
+  const homeEnd = homeTraj[homeTraj.length - 1].y;
+  const awayEnd = awayTraj[awayTraj.length - 1].y;
+  const diff    = homeEnd - awayEnd;
   const diffTxt = diff > 0
-  ? `${team1} ${diff} addım üstün`
-  : diff < 0
-  ? `${team2} ${Math.abs(diff)} addım üstün`
-  : "Bərabər";
+    ? `${team1} ${diff} addım üstün`
+    : diff < 0
+    ? `${team2} ${Math.abs(diff)} addım üstün`
+    : "Bərabər";
 
+  const leg = document.getElementById("chartLegend");
   if (leg) {
-  leg.innerHTML = `
-    <span><span class="legend-dot" style="background:#3b82f6"></span>${team1} (${homeEnd > 0 ? "+" : ""}${homeEnd})</span>
-    <span><span class="legend-dot" style="background:#f59e0b"></span>${team2} (${awayEnd > 0 ? "+" : ""}${awayEnd})</span>
-    <span style="margin-left:auto;font-size:11px;font-weight:700;color:${diff >= 0 ? '#3b82f6' : '#f59e0b'}">${diffTxt}</span>
-  `;
-}
+    leg.innerHTML = `
+      <span><span class="legend-dot" style="background:#3b82f6"></span>${team1} (${homeEnd > 0 ? "+" : ""}${homeEnd})</span>
+      <span><span class="legend-dot" style="background:#f59e0b"></span>${team2} (${awayEnd > 0 ? "+" : ""}${awayEnd})</span>
+      <span style="margin-left:auto;font-size:11px;font-weight:700;color:${diff >= 0 ? "#3b82f6" : "#f59e0b"}">${diffTxt}</span>
+    `;
+  }
 
-  // M4 qərarına görə chart border rəngi
+  // M4 border
   const chartWrapper = document.getElementById("chartContainerWrapper");
   if (chartWrapper && m4) {
     const qerar = (m4.umumi_qerar || m4["qərar"] || "").toUpperCase();
     chartWrapper.classList.remove("m4-yes", "m4-no");
-    if (qerar === "OYNARIM") chartWrapper.classList.add("m4-yes");
+    if (qerar === "OYNARIM")    chartWrapper.classList.add("m4-yes");
     else if (qerar === "OYNAMARAM") chartWrapper.classList.add("m4-no");
   }
 }
