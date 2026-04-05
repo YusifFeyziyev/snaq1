@@ -962,10 +962,10 @@ async function startAnalysis() {
 
     const { parser, m1, m2, m3, m4 } = res;
 
-    _m1Data = m1;
-    _m2Data = m2;
-    _m3Data = m3;
-    _m4Data = m4;
+    _m1Data = (m1 && typeof m1 === "object") ? m1 : {};
+    _m2Data = (m2 && typeof m2 === "object") ? m2 : {};
+    _m3Data = (m3 && typeof m3 === "object") ? m3 : {};
+    _m4Data = (m4 && typeof m4 === "object") ? m4 : {};
 
     _team1 = parser?.ev_sahibi || m1?.team1 || "Ev";
     _team2 = parser?.qonaq     || m1?.team2 || "Qonaq";
@@ -1007,8 +1007,10 @@ async function startAnalysis() {
     resultPanel.classList.remove("hidden");
 
     // parser-dən forma götür, m1Data-ya əlavə et
+    if (_m1Data && typeof _m1Data === "object") {
     _m1Data.team1_form = parser?.team1_form || "";
     _m1Data.team2_form = parser?.team2_form || "";
+}
 
     setTimeout(() => {
       drawTrajectoryChart(_m1Data, _team1, _team2, _m4Data);
