@@ -172,12 +172,13 @@ SYSTEM_PROMPT = """Sən futbol məlumat analitikisən. Sənə axtarış nəticə
 QAYDALAR (MÜTLƏQ):
 1. Yalnız axtarış nəticələrindəki REAL məlumatlara əsaslan.
 2. Axtarış nəticəsində tapılmayan məlumat üçün status="tapılmadı", confidence=0.0 qaytar.
-3. ƏSLA uydurmaq, ehtimal etmək, ya da bil ki-dən istifadə etmə.
+3. ƏSLA uydurmaq, ehtimal etmək, ya da öz biliyin ilə cavab vermə. 
+   Axtarışda Simone Sozza yazırsa amma Daniele Doveri tapılıbsa — tapılanı yaz.
 4. Məlumat tapılıbsa status="real", confidence=0.7-0.95 qaytar.
 5. status="təxmin" istifadə etmə — ya "real", ya "tapılmadı".
-6. Məşqçi adlarını (coach) mütləq axtarış nəticələrindən tap — Inter Milan üçün Simone Inzaghi kimi adlar ola bilər.
+6. Məşqçi adlarını (coach) mütləq axtarış nəticələrindən tap.
 7. Zədəli oyunçu siyahısını injury/suspended/doubtful sözlərinin yanındakı adlardan çıxar.
-8. Hakimi referee/arbitro/wasit sözlərinin yanındakı adlardan tap.
+8. Hakimi referee/arbitro/árbitro/Schiedsrichter/wasit sözlərinin yanındakı adlardan tap.
 9. Yalnız aşağıdakı JSON strukturunu qaytar, heç bir əlavə mətn yazma."""
 
 
@@ -274,7 +275,7 @@ Yalnız aşağıdakı JSON strukturunu qaytar:
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.0,
-                max_output_tokens=2500,
+                max_output_tokens=8000,
             ),
         )
         content = response.text.strip()
@@ -324,8 +325,10 @@ def run_searches_parallel(queries: List[str]) -> tuple[str, int]:
 
 
 def run_m2(parser_json: Dict) -> Dict:
-    team1 = parser_json.get("team1", "Unknown")
-    team2 = parser_json.get("team2", "Unknown")
+    team1  = parser_json.get("team1", "Unknown")
+    team2  = parser_json.get("team2", "Unknown")
+    league = parser_json.get("league", "")
+    date   = parser_json.get("date", "2026")[:7]   # "2026-04" formatı
 
     if not GENAI_AVAILABLE:
         return _empty_result(error="google-genai quraşdırılmayıb.")
@@ -334,22 +337,24 @@ def run_m2(parser_json: Dict) -> Dict:
     if not TAVILY_KEY and not SERPER_KEY:
         return _empty_result(error="Nə TAVILY_KEY, nə SERPER_KEY tapılmadı.")
 
-    print(f"M2 başladı: {team1} vs {team2}")
+    league_tag = f"{league} " if league and league not in ("Unknown", "") else ""
+
+    print(f"M2 başladı: {team1} vs {team2} | Liqa: {league_tag.strip() or 'naməlum'}")
 
     queries = [
-    f"{team1} vs {team2} Serie A referee appointed 2026",
-    f"{team1} {team2} injury news suspended players April 2026",
-    f"{team1} {team2} predicted starting lineup April 2026",
-    f"{team1} {team2} head to head preview betting tips",
-    f"{team1} last 5 matches results goals scored 2026",
-    f"{team2} last 5 matches results goals scored 2026",
-    f"{team1} coach tactics formation current season",
-    f"{team2} coach tactics formation current season",
-]
-
+        f"{team1} {team2} {league_tag}referee appointed {date}",
+        f"{team1} {team2} {league_tag}injury suspended players {date}",
+        f"{team1} {team2} {league_tag}predicted lineup {date}",
+        f"{team1} {team2} head to head preview {date}",
+        f"{team1} last 5 matches results {date}",
+        f"{team2} last 5 matches results {date}",
+        f"{team1} coach tactics formation {league_tag}2025-26",
+        f"{team2} coach tactics formation {league_tag}2025-26",
+    ]
 
     # ✅ Paralel axtarış — əvvəl ardıcıl idi
     all_search_text, successful = run_searches_parallel(queries)
+    # ... (buradan aşağı heç nə dəyişmir)
     print(f"Axtarış tamamlandı: {successful}/{len(queries)} uğurlu")
 
     if successful == 0:
