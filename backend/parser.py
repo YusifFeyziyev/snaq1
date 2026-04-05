@@ -38,6 +38,11 @@ def get_league_avg(league: str) -> Dict:
 def safe_str(text) -> str:
     return str(text).encode('ascii', errors='replace').decode('ascii')
 
+def fix_invalid_json(text: str) -> str:
+    # 1.79 / 1  →  1.79
+    text = re.sub(r'(\d+\.?\d*)\s*/\s*\d+\.?\d*', r'\1', text)
+    return text
+
 
 class SoccerStatsParser:
     def __init__(self):
@@ -46,6 +51,8 @@ class SoccerStatsParser:
         self.keys = GROQ_KEYS_PARSER
         self.model = MODEL_PARSER
         self.current_key_index = 0
+
+
 
     def _rotate_key(self):
         self.current_key_index = (self.current_key_index + 1) % len(self.keys)
@@ -60,7 +67,7 @@ class SoccerStatsParser:
             "model": self.model,
             "messages": messages,
             "temperature": 0.1,
-            "max_tokens": 4000,
+            "max_tokens": 6000,
         }
         resp = requests.post(
             GROQ_API_URL,
@@ -80,6 +87,7 @@ class SoccerStatsParser:
 
     def _extract_json(self, text: str) -> Dict:
         cleaned = self._clean_json(text)
+        cleaned = fix_invalid_json(cleaned)
         match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
         if match:
             json_str = match.group(1)
@@ -91,8 +99,18 @@ class SoccerStatsParser:
                     return json.loads(fixed)
                 except Exception:
                     pass
-                raise ValueError(f"JSON parse xetasi. Metn: {json_str[:200]}")
+                try:
+                    trimmed = json_str.rstrip().rstrip(",")
+                    opens = trimmed.count("{") - trimmed.count("}")
+                    arr_opens = trimmed.count("[") - trimmed.count("]")
+                    trimmed += "]" * arr_opens + "}" * opens
+                    return json.loads(trimmed)
+                except json.JSONDecodeError:
+                    pass
+            raise ValueError(f"JSON parse xetasi. Metn: {safe_str(json_str[:300])}")
         raise ValueError("JSON obyekti tapilmadi.")
+
+
 
     def _build_prompt(self, raw_text: str) -> str:
         return (
