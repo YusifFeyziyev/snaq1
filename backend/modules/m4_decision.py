@@ -103,6 +103,10 @@ class M4Decision:
                                 sys_conf: float, no_bet: bool) -> str:
         return f"""Sən futbol analizi üçün son qərar modulusan (M4).
 
+"MÜHÜM QAYDA: Əgər umumi_qerar='OYNARIM'-dirsə, ən azı "
+"2-3 bazarda qerar='OYNARIM' olmalıdır. "
+"Əgər heç bir bazarda oynamırıqsa, umumi_qerar da 'OYNAMARAM' olmalıdır."       
+
 MODUL GÜVƏNLƏRİ (0-10 şkala):
 - M1 (Riyazi model): {m1_g}/10
 - M2 (Araşdırma):    {m2_g}/10

@@ -194,8 +194,11 @@ def calculate_over_under(team1_stats: Dict, team2_stats: Dict,
     elif market == "throwins":
         home_avg = get_stat(team1_stats, 'avg_throwins', 20.0)
         away_avg = get_stat(team2_stats, 'avg_throwins', 19.0)
-        expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_throwins', 39.0)
+        expected_total = home_avg + away_avg
+        # ✅ Sanity check — real dəyər həmişə 30+ olur
+        if expected_total < 28.0:
+            expected_total = league_avg
     elif market == "shots":
         home_avg = get_stat(team1_stats, 'avg_shots', 12.0)
         away_avg = get_stat(team2_stats, 'avg_shots', 10.5)
@@ -337,19 +340,21 @@ def calculate_combination(team1_stats: Dict, team2_stats: Dict, markets: List[st
         results["draw_and_under2.5"] = round(x12["draw"] * ou["under"], 4)
     return results
 
-def calculate_corner_handicap(team1_stats: Dict, team2_stats: Dict, handicap: float = -1.5) -> Dict:
-    home_corners = get_stat(team1_stats, 'avg_corners_for', 5.0)
+def calculate_corner_handicap(team1_stats, team2_stats, handicap=-1.5):
+    home_corners = get_stat(team1_stats, 'avg_corners_for', 5.5)
     away_corners = get_stat(team2_stats, 'avg_corners_for', 4.5)
-    expected_diff = home_corners - away_corners
-    if expected_diff > handicap:
-        prob_home_cover = 0.6 + (expected_diff - handicap) / 10
-    else:
-        prob_home_cover = 0.4 + (expected_diff - handicap) / 10
-    prob_home_cover = max(0.1, min(0.9, prob_home_cover))
-    return {
-        "home_cover": round(prob_home_cover, 4),
-        "away_cover": round(1 - prob_home_cover, 4)
-    }
+    
+    # ✅ Sanity check: parser against/for-u qarışdıra bilər
+    home_against = get_stat(team1_stats, 'avg_corners_against', 4.5)
+    away_against = get_stat(team2_stats, 'avg_corners_against', 5.5)
+    
+    # Ev daha çox corner vurursa for > against olmalıdır
+    # Əgər tərsinədirsə, dəyərləri düzəlt
+    if home_corners < home_against and home_against > 4.0:
+        home_corners, _ = home_against, home_corners
+    if away_corners > away_against and away_against > 2.0:
+        away_corners = away_against
+    ...
 
 def calculate_cascading_bonus(m1_results: Dict) -> Dict:
     confidence_boost = 0.0
@@ -404,7 +409,7 @@ def run_m1(parser_json: Dict) -> Dict:
 
     # Qalanı eyni qalır...
     h2h_weight, h2h_match_count = calculate_h2h_weight(h2h_stats)
-    
+
     # ✅ Parser-dən gələn xam ortalamalardan attack/defense strength yenidən hesabla
     # Parser-in hesabladığına etibar etmirik — özümüz hesablayırıq
     lh_avg = get_stat(team1_stats, 'league_home_avg_goals', 1.35)

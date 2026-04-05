@@ -114,7 +114,8 @@ def hesabla_carpanlar(parser_json: Dict, m2_data: Dict) -> Dict:
 
     # --- MOTİVASİYA ---
     # ✅ DÜZƏLİŞ 2: league_position parser-dən gəlmirsə M2-dən al
-    mot_ev  = get_m2_field(m2_data, "motivation", "home_motivation", 0.6)
+    mot_field = m2_data.get("motivation", {})
+    mot_ev = mot_field.get("home_motivation") if isinstance(mot_field, dict) else None
     mot_qon = get_m2_field(m2_data, "motivation", "away_motivation", 0.6)
     mot_map = {"çox yüksək": 1.15, "yüksək": 1.08, "orta": 1.0, "aşağı": 0.88, "yox": 0.82}
     if mot_ev  and mot_ev  in mot_map: carpanlar["motivasiya_ev"]    = mot_map[mot_ev]
