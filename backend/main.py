@@ -108,7 +108,9 @@ def normalize_confidence(val):
     try:
         val = float(val)
         if val <= 1:
-            val *= 100
+            val *= 100   # 0-1 şkalası → 0-100
+        elif val <= 10:
+            val *= 10    # 0-10 şkalası → 0-100
         return max(0, min(100, val))
     except:
         return 0
