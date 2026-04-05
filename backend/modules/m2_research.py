@@ -58,21 +58,26 @@ def validate_api_keys() -> Dict[str, bool]:
 
 # ========== SEARCH FUNKSİYALARI ==========
 
-def search_with_tavily(query: str, retries: int = 1) -> Optional[Dict]:
+def search_with_tavily(query: str, retries: int = 2) -> Optional[Dict]:
     if not TAVILY_KEY:
         return None
     for attempt in range(retries):
-        # ✅ DÜZƏLİŞ 1: requests.post → safe_request_post
         result = safe_request_post(
             TAVILY_API_URL,
             headers={"Authorization": f"Bearer {TAVILY_KEY}", "Content-Type": "application/json"},
-            json_data={"query": query, "search_depth": "basic", "max_results": 5},
-            timeout=10,
+            json_data={
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 7,
+                "include_answer": True,
+            },
+            timeout=15,
         )
         if result is not None:
             debug_m2("tavily search uğurlu", query[:40])
             return result
         debug_m2(f"tavily cəhd {attempt + 1} uğursuz", query[:40])
+        time.sleep(0.5)
     return None
 
 
@@ -107,32 +112,40 @@ def extract_search_text(search_result: Optional[Dict]) -> str:
     if not search_result:
         return "Heç bir nəticə tapılmadı."
     parts = []
+
+    # Tavily answer field — ən dəqiq xülasə
+    answer = search_result.get("answer", "").strip()
+    if answer:
+        parts.append(f"XÜLASƏ: {answer}")
+        parts.append("---")
+
     if "results" in search_result:
-        for item in search_result["results"][:5]:
+        for item in search_result["results"][:7]:
             t = item.get("title", "").strip()
             s = item.get("content", item.get("snippet", "")).strip()
-            # ✅ DÜZƏLİŞ 3: hər ikisi boşdursa → skip et
+            url = item.get("url", "")
             if not t and not s:
                 continue
             if t:
                 parts.append(f"Başlıq: {t}")
+            if url:
+                parts.append(f"Mənbə: {url}")
             if s:
-                parts.append(f"Məzmun: {s}")
+                # İlk 600 simvol — daha çox məzmun
+                parts.append(f"Məzmun: {s[:600]}")
             parts.append("---")
     elif "organic" in search_result:
-        for item in search_result["organic"][:5]:
+        for item in search_result["organic"][:7]:
             t = item.get("title", "").strip()
             s = item.get("snippet", "").strip()
-            # ✅ DÜZƏLİŞ 3: hər ikisi boşdursa → skip et
             if not t and not s:
                 continue
             if t:
                 parts.append(f"Başlıq: {t}")
             if s:
-                parts.append(f"Məzmun: {s}")
+                parts.append(f"Məzmun: {s[:600]}")
             parts.append("---")
 
-    # ✅ DÜZƏLİŞ 3: boş parts olsa → fallback string
     if not parts:
         return "Heç bir nəticə tapılmadı."
 
@@ -242,24 +255,33 @@ SYSTEM_PROMPT = """Sən futbol məlumat analitikisən. Sənə axtarış nəticə
 
 QAYDALAR (MÜTLƏQ):
 1. Axtarış nəticələrindəki HƏM BİRBAŞA, HƏM DOLAYI məlumatlardan istifadə et.
-2. DOLAYI MƏLUMAT NÜMUNƏLƏRİ — bunlar "real" sayılır:
-   - "Conte's Napoli lined up 4-3-3" → ev məşqçisi Conte, ev sxemi 4-3-3
-   - "Milan's Fonseca opted for..." → qonaq məşqçisi Fonseca
-   - "without injured Osimhen" → Osimhen ev_absent siyahısına
-   - "played Europa League Thursday" → 3 gün əvvəl → yorğunluq var
-   - "title race decider" / "must-win" → motivasiya yüksəkdir
-   - "rotation expected" / "squad rotation" → rotation var
-   - hava saytı: "Naples: 18°C, clear" → temperature=18, condition=clear
-3. Şübhəli məlumat → confidence=0.5-0.65, status="real"
-4. Axtarışda İZ BELƏ OLMAYAN məlumat → status="tapılmadı", confidence=0.0
-5. status="təxmin" QADAĞANDIR — ya "real", ya "tapılmadı"
-6. JSON-da rəqəm sahələr mütləq rəqəm olsun (string yox)
-7. Yalnız aşağıdakı JSON strukturunu qaytar, heç bir əlavə mətn yazma."""
+2. HAKİM: "referee", "arbitro", "árbitro", "officiel", "wasit" sözlərinin yanındakı adı tap.
+   - Şübhəli olsa belə confidence=0.6 ilə "real" say
+   - foul_sensitivity: hakimin ortalama sarı kartına görə — 4+ kart/oyun="yüksək", 3-4="orta", <3="aşağı"
+3. ZƏDƏLƏLƏr: "injured", "out", "doubtful", "suspended", "missing", "unavailable", "assente", "squalificato" sözlərinin yanındakı oyunçu adları
+   - Hər komanda üçün ayrı siyahı ver
+4. MƏŞQÇI: "manager", "coach", "allenatore", "head coach", "mister" sözlərinin yanındakı adı tap
+   - taktiki trend: son oyunlardakı "4-3-3", "4-2-3-1", "press", "possession", "counter" kimi ifadələrdən çıxar
+5. HEYƏT: "lineup", "XI", "formation", "starting" sözlərinin yanındakı formasyonu tap
+   - Tapılmadısa son oyundan gözlənilən formasyonu orta güvənlə ver (confidence=0.55)
+6. YORĞUNLUq: 
+   - Son oyun tarixini tap (məs: "played April 3rd", "last match on 3 Apr")
+   - Bu oyunun tarixi: {match_date}
+   - days_since = bu oyun tarixi - son oyun tarixi (gün fərqi hesabla)
+   - 1-3 gün = "yüksək" yorğunluq, 4-5 gün = "orta", 6+ gün = "aşağı"
+7. MOTİVASİYA: Cədvəl mövqeyi, şampionluq/degradasiya mübarizəsi, H2H rəqabəti nəzərə al
+   - Avtomatik: zirvə mübarizəsi = "yüksək", orta cədvəl = "orta"
+8. HAVA: stadionun şəhərinin hava proqnozunu tap (Naples/Milano/Madrid və s.)
+9. Şübhəli məlumat → confidence=0.5-0.65, status="real"
+10. Axtarışda İZ BELƏ OLMAYAN məlumat → status="tapılmadı", confidence=0.0
+11. status="təxmin" QADAĞANDIR — ya "real", ya "tapılmadı"
+12. Yalnız aşağıdakı JSON strukturunu qaytar, heç bir əlavə mətn yazma."""
 
 
 # ========== DÜZƏLİŞ 7: GEMINI RESPONSE PROTECTION ==========
 
-def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
+def analyze_with_gemini(team1: str, team2: str, search_text: str,
+                        match_date: str = "") -> Dict:
     if not GENAI_AVAILABLE:
         raise ImportError("google-genai quraşdırılmayıb.")
     if not GEMINI_API_KEY:
@@ -268,82 +290,86 @@ def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
     model_name = MODEL_M2 or "gemini-2.5-flash-preview-04-17"
     client = genai.Client(api_key=GEMINI_API_KEY)
 
+    # SYSTEM_PROMPT-da {match_date} placeholder doldur
+    system_filled = SYSTEM_PROMPT.replace("{match_date}", match_date or "bilinmir")
+
     user_prompt = f"""
-{SYSTEM_PROMPT}
+{system_filled}
 
 Komandalar: {team1} (ev) vs {team2} (qonaq)
+Bu oyunun tarixi: {match_date or "bilinmir"}
 
 Axtarış nəticələri:
-{search_text[:9000]}
+{search_text[:10000]}
 
-ÇIXIŞ QAYDASI — hər sahə üçün:
-- Tapıldısa: status="real", confidence=0.7-0.95, sahəni doldur
+ÇIXIŞ QAYDASI:
+- Tapıldısa: status="real", confidence=0.70-0.95
+- Şübhəlidirsə: status="real", confidence=0.50-0.69
 - Tapılmadısa: status="tapılmadı", confidence=0.0, sahəni null burax
-- Şübhəlidirsə: status="real", confidence=0.5-0.65
 
 Yalnız bu JSON strukturunu qaytar (başqa heç nə yazma):
 {{
     "referee": {{
-        "name": "Hakim adı və ya null",
+        "name": "Hakimin adı soyadı",
         "yellow_avg": null,
         "red_avg": null,
-        "foul_sensitivity": "yüksək/orta/aşağı və ya null",
-        "status": "real və ya tapılmadı",
+        "foul_sensitivity": "yüksək/orta/aşağı",
+        "status": "real",
         "confidence": 0.85
     }},
     "coach": {{
-        "home_coach": "Ev məşqçisi adı və ya null",
-        "away_coach": "Qonaq məşqçisi adı və ya null",
-        "home_tactical_trend": "hücum/müdafiə/sahiblik/pressing və ya null",
-        "away_tactical_trend": "hücum/müdafiə/sahiblik/pressing və ya null",
-        "status": "real və ya tapılmadı",
+        "home_coach": "Ev məşqçisinin adı soyadı",
+        "away_coach": "Qonaq məşqçisinin adı soyadı",
+        "home_tactical_trend": "pressing/sahiblik/kontra/balanslı",
+        "away_tactical_trend": "pressing/sahiblik/kontra/balanslı",
+        "status": "real",
         "confidence": 0.75
     }},
     "injuries": {{
-        "home_absent": ["oyunçu adları siyahısı"],
-        "away_absent": ["oyunçu adları siyahısı"],
+        "home_absent": ["Oyunçu 1", "Oyunçu 2"],
+        "away_absent": ["Oyunçu adı"],
         "home_doubtful": [],
         "away_doubtful": [],
-        "key_players_missing": [],
-        "status": "real və ya tapılmadı",
+        "key_players_missing": ["Ən vacib çatışmayan oyunçu"],
+        "status": "real",
         "confidence": 0.80
     }},
     "lineup": {{
-        "home_expected": "4-3-3 formatında və ya null",
-        "away_expected": "4-2-3-1 formatında və ya null",
-        "home_rotation": "aşağı/orta/yüksək və ya null",
-        "away_rotation": "aşağı/orta/yüksək və ya null",
-        "status": "real və ya tapılmadı",
-        "confidence": 0.70
+        "home_expected": "4-3-3",
+        "away_expected": "4-2-3-1",
+        "home_rotation": "aşağı/orta/yüksək",
+        "away_rotation": "aşağı/orta/yüksək",
+        "status": "real",
+        "confidence": 0.65
     }},
     "stadium": {{
-        "name": "Stadion adı və ya null",
+        "name": "Stadion adı",
         "capacity": null,
-        "home_advantage": "güclü/orta/zəif və ya null",
-        "status": "real və ya tapılmadı",
+        "home_advantage": "güclü/orta/zəif",
+        "status": "real",
         "confidence": 0.80
     }},
     "weather": {{
-        "temperature": null,
-        "condition": "aydın/buludlu/yağışlı və ya null",
-        "wind": "zəif/orta/güclü və ya null",
-        "impact": "aşağı/orta/yüksək və ya null",
-        "status": "real və ya tapılmadı",
+        "temperature": 18,
+        "condition": "aydın/buludlu/yağışlı",
+        "wind": "zəif/orta/güclü",
+        "impact": "aşağı/orta/yüksək",
+        "status": "real",
         "confidence": 0.70
     }},
     "motivation": {{
         "home_motivation": "yüksək/orta/aşağı",
         "away_motivation": "yüksək/orta/aşağı",
-        "reason": "Motivasiya səbəbi — liqa mövqeyi, rekabet, nə varsa",
+        "reason": "Liqa mövqeyi və rəqabət konteksti",
         "status": "real",
-        "confidence": 0.75
+        "confidence": 0.80
     }},
     "fatigue": {{
-        "home_fatigue": "aşağı/orta/yüksək və ya null",
-        "away_fatigue": "aşağı/orta/yüksək və ya null",
-        "days_since_last_match_home": null,
-        "days_since_last_match_away": null,
-        "status": "real və ya tapılmadı",
+        "home_fatigue": "aşağı/orta/yüksək",
+        "away_fatigue": "aşağı/orta/yüksək",
+        "days_since_last_match_home": 7,
+        "days_since_last_match_away": 6,
+        "status": "real",
         "confidence": 0.70
     }}
 }}"""
@@ -359,13 +385,10 @@ Yalnız bu JSON strukturunu qaytar (başqa heç nə yazma):
             ),
         )
 
-        # ✅ DÜZƏLİŞ 7: boş response yoxlaması
         if not response or not response.text:
             raise ValueError("Gemini boş cavab qaytardı.")
 
         content = response.text.strip()
-
-        # ✅ DÜZƏLİŞ 7: strip-dən sonra da boş ola bilər
         if not content:
             raise ValueError("Gemini cavabı yalnız boşluqlardan ibarətdir.")
 
@@ -379,7 +402,7 @@ Yalnız bu JSON strukturunu qaytar (başqa heç nə yazma):
         raise Exception(f"Gemini API xətası: {str(e)}")
 
 
-# ========== DÜZƏLİŞ 2 + 8: PARALEL AXTARIŞ ==========
+# ========== PARALEL AXTARIŞ ==========
 
 def run_searches_parallel(queries: List[str]) -> tuple:
     """
@@ -396,7 +419,7 @@ def run_searches_parallel(queries: List[str]) -> tuple:
         debug_m2("axtarış tamamlandı", q[:40])
         return q, text
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {executor.submit(_search_one, q): q for q in queries}
 
         # ✅ DÜZƏLİŞ 2: timeout-u as_completed-dən çıxardıq
@@ -431,10 +454,11 @@ def run_searches_parallel(queries: List[str]) -> tuple:
 # ========== ƏSAS run_m2 FUNKSİYASI ==========
 
 def run_m2(parser_json: Dict) -> Dict:
-    team1  = parser_json.get("team1", "Unknown")
-    team2  = parser_json.get("team2", "Unknown")
-    league = parser_json.get("league", "")
-    date   = parser_json.get("date", "2026")[:7]   # "2026-04" formatı
+    team1      = parser_json.get("team1", "Unknown")
+    team2      = parser_json.get("team2", "Unknown")
+    league     = parser_json.get("league", "")
+    match_date = parser_json.get("date", "")[:10]   # "2026-04-06"
+    date_tag   = match_date[:7] if match_date else "2026"  # "2026-04"
 
     if not GENAI_AVAILABLE:
         return _empty_result(error="google-genai quraşdırılmayıb.")
@@ -444,18 +468,28 @@ def run_m2(parser_json: Dict) -> Dict:
         return _empty_result(error="Nə TAVILY_KEY, nə SERPER_KEY tapılmadı.")
 
     league_tag = f"{league} " if league and league not in ("Unknown", "") else ""
-
     print(f"M2 başladı: {team1} vs {team2} | Liqa: {league_tag.strip() or 'naməlum'}")
 
+    # 12 hədəfli axtarış sorğusu
     queries = [
-        f"{team1} vs {team2} referee official appointed {date}",
-        f"{team1} {team2} injuries suspensions team news {date}",
-        f"{team1} {team2} predicted starting lineup XI {date}",
-        f"{team1} {team2} match preview prediction {date}",
-        f"{team1} manager coach name tactics formation {date}",
-        f"{team2} manager coach name tactics formation {date}",
-        f"{team1} {team2} motivation standings league table {date}",
-        f"{team1} {team2} fatigue schedule fixture congestion {date}",
+        # Hakim
+        f"{team1} {team2} referee official appointed {league_tag}{date_tag}",
+        f"{team1} vs {team2} arbitro designato {date_tag}",
+        # Zədələr — hər komanda ayrıca
+        f"{team1} injury news team news out suspended {date_tag}",
+        f"{team2} injury news team news out suspended {date_tag}",
+        # Heyət
+        f"{team1} predicted starting lineup XI formation {date_tag}",
+        f"{team2} predicted starting lineup XI formation {date_tag}",
+        # Məşqçi
+        f"{team1} head coach manager name tactics {date_tag}",
+        f"{team2} head coach manager name tactics {date_tag}",
+        # Son oyun (yorğunluq üçün)
+        f"{team1} last match played result date {date_tag}",
+        f"{team2} last match played result date {date_tag}",
+        # Ümumi preview + motivasiya
+        f"{team1} {team2} match preview {league_tag}{date_tag}",
+        f"{team1} {team2} {league_tag}standings title race motivation {date_tag}",
     ]
 
     all_search_text, successful = run_searches_parallel(queries)
@@ -466,7 +500,7 @@ def run_m2(parser_json: Dict) -> Dict:
         return _empty_result(warning="Heç bir axtarış nəticəsi tapılmadı.")
 
     try:
-        result = analyze_with_gemini(team1, team2, all_search_text)
+        result = analyze_with_gemini(team1, team2, all_search_text, match_date)
         result = _post_process(result)
         result["m2_guveni"] = calculate_m2_guveni(result)
 
@@ -479,14 +513,11 @@ def run_m2(parser_json: Dict) -> Dict:
         if missing_count > 4:
             result["m2_warning"] = f"{missing_count} kateqoriyada real məlumat tapılmadı."
 
-        # ✅ DÜZƏLİŞ 9: OUTPUT SABİTLİYİ — result həmişə etibarlı dict olsun
         if not isinstance(result, dict):
             return _empty_result(error="Nəticə dict formatında deyil.")
 
-        # ✅ DÜZƏLİŞ 9: m2_guveni mütləq float olsun
         result["m2_guveni"] = float(result.get("m2_guveni", 0.0))
 
-        # ✅ DÜZƏLİŞ 9: _empty_sections açarları həmişə mövcut olsun
         empty = _empty_sections()
         for key in empty:
             if key not in result:
