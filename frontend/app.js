@@ -1006,6 +1006,10 @@ async function startAnalysis() {
 
     resultPanel.classList.remove("hidden");
 
+    // parser-dən forma götür, m1Data-ya əlavə et
+    _m1Data.team1_form = parser?.team1_form || "";
+    _m1Data.team2_form = parser?.team2_form || "";
+
     setTimeout(() => {
       drawTrajectoryChart(_m1Data, _team1, _team2, _m4Data);
       resultPanel.scrollIntoView({ behavior: "smooth" });

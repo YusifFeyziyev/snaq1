@@ -102,13 +102,19 @@ class SoccerStatsParser:
             "- defense_strength = team's avg goals conceded / opponent's league avg\n"
             "- If exact data not found, use reasonable estimates based on context\n"
             "- data_confidence: 0.0-1.0 based on how much data was available (0.9 if full stats, 0.5 if partial)\n"
-            "- All numeric fields must be float, not null\n\n"
+            "- All numeric fields must be float, not null\n"
+            "- team1_form and team2_form: extract the recent match results as a string of W (win), D (draw), L (loss) characters.\n"
+            "  Example: if text says 'Inter last 5: W W D L W' → team1_form = 'WWDLW'\n"
+            "  If results are written as Q/G=Win, M/K=Loss, B=Draw, convert them to W/D/L.\n"
+            "  Leave empty string if no form data found.\n\n"
             "Return this exact JSON structure:\n"
             "{\n"
             '  "team1": "string",\n'
             '  "team2": "string",\n'
             '  "league": "string",\n'
             '  "date": "YYYY-MM-DD",\n'
+            '  "team1_form": "string",\n'
+            '  "team2_form": "string",\n'
             '  "team1_stats": {\n'
             '    "attack_strength": 1.0,\n'
             '    "defense_strength": 1.0,\n'
@@ -153,6 +159,49 @@ class SoccerStatsParser:
             "Return ONLY the JSON object, nothing else."
         )
 
+    def _normalize_form(self, s: str) -> str:
+        """Q/G → W, M/K → L, B → D çevir"""
+        s = s.upper()
+        s = re.sub(r'[QG]', 'W', s)
+        s = re.sub(r'[MK]', 'L', s)
+        s = re.sub(r'B',    'D', s)
+        return s
+
+    def _extract_form_regex(self, text: str, team_name: str) -> str:
+        """
+        Statistika mətni içindən forma sətirini çəkir.
+        Dəstəklənən formatlar:
+          - "Inter last 5: W W D L W"
+          - "Inter Milan: Q Q M B Q"  (Azərbaycan/Türk)
+          - "Form: WWDLW"
+          - "last 5: W D L W W"
+        """
+        team_first = team_name.split()[0] if team_name else ""
+        team_escaped = re.escape(team_first) if team_first else r'\w+'
+
+        patterns = [
+            # "Inter last 5: W W D L W" və ya "Inter Milan: WWDLW"
+            rf"{team_escaped}[^:\n]{{0,40}}:\s*([WDLQGMKBwdlqgmkb](?:[\s\-,]*[WDLQGMKBwdlqgmkb]){{2,9}})",
+            # "Form: WWDLW"
+            r"[Ff]orm\s*:?\s*([WDLQGMKBwdlqgmkb]{3,10})",
+            # "last 5: W D L W W"
+            r"last\s*\d+\s*:?\s*([WDLwdl](?:[\s,]*[WDLwdl]){2,9})",
+            # "son 5: Q M B Q Q"
+            r"son\s*\d+\s*:?\s*([WDLQGMKBwdlqgmkb](?:[\s,]*[WDLQGMKBwdlqgmkb]){2,9})",
+            # sadəcə 4+ ardıcıl W/D/L hərfləri (boşluqla ayrılmış)
+            r"\b([WDLwdl](?:\s[WDLwdl]){3,9})\b",
+        ]
+
+        for pat in patterns:
+            m = re.search(pat, text, re.IGNORECASE)
+            if m:
+                raw = self._normalize_form(m.group(1))
+                letters = re.sub(r"[^WDL]", "", raw)
+                if len(letters) >= 3:
+                    return letters[:10]
+
+        return ""
+
     def _inject_league_averages(self, result: Dict) -> Dict:
         """Parser-in qaytardığı JSON-a lig ortalamalarını əlavə edir"""
         league = result.get("league", "")
@@ -164,7 +213,6 @@ class SoccerStatsParser:
                 result[team_key] = {}
                 stats = result[team_key]
 
-            # Lig ortalamalarını əlavə et
             stats.setdefault("league_home_avg_goals", lg["home"])
             stats.setdefault("league_away_avg_goals", lg["away"])
             stats.setdefault("league_avg_goals",      lg["total"])
@@ -176,7 +224,6 @@ class SoccerStatsParser:
             stats.setdefault("league_avg_sot",        lg["sot"])
             stats.setdefault("league_avg_penalties",  lg["penalties"])
 
-            # Əsas dəyərlər sıfır və ya yoxdursa default qoy
             stats.setdefault("attack_strength",     1.0)
             stats.setdefault("defense_strength",    1.0)
             stats.setdefault("avg_goals_scored",    lg["home"] if team_key == "team1_stats" else lg["away"])
@@ -193,14 +240,16 @@ class SoccerStatsParser:
             stats.setdefault("avg_penalties_for",   0.2)
             stats.setdefault("data_confidence",     0.5)
 
-            # Sıfır dəyərləri düzəlt (LLM bəzən 0.0 qaytarır)
             if stats.get("attack_strength", 0) <= 0:
                 stats["attack_strength"] = 1.0
             if stats.get("defense_strength", 0) <= 0:
                 stats["defense_strength"] = 1.0
 
-        # h2h_stats yoxdursa boş əlavə et
         result.setdefault("h2h_stats", {"matches": []})
+
+        # Forma sahələrini default olaraq əlavə et
+        result.setdefault("team1_form", "")
+        result.setdefault("team2_form", "")
 
         return result
 
@@ -218,7 +267,24 @@ class SoccerStatsParser:
             content = self._call_api(messages)
             result = self._extract_json(content)
             result = self._inject_league_averages(result)
+
+            # LLM forma qaytarmayıbsa regex ilə çək
+            if not result.get("team1_form"):
+                result["team1_form"] = self._extract_form_regex(
+                    raw_text, result.get("team1", ""))
+
+            if not result.get("team2_form"):
+                result["team2_form"] = self._extract_form_regex(
+                    raw_text, result.get("team2", ""))
+
+            # Forma varsa log yaz
+            f1 = result.get("team1_form", "")
+            f2 = result.get("team2_form", "")
+            if f1: print(f"Parser: {result.get('team1','')} forması: {f1}")
+            if f2: print(f"Parser: {result.get('team2','')} forması: {f2}")
+
             return result
+
         except ConnectionError as e:
             if "rate limit" in str(e):
                 print("Rate limit askarlandi, key deyisdirilir...")
@@ -240,7 +306,8 @@ if __name__ == "__main__":
         "Serie A, 5 April 2026\n"
         "Inter Milan home: avg 2.60 goals scored, 0.87 conceded, 7.4 corners\n"
         "AS Roma away: avg 1.13 goals scored, 0.93 conceded, 4.27 corners\n"
-        "Inter last 8: W5 D2 L1 | Roma last 8: W3 D2 L3\n"
+        "Inter last 5: W W D L W\n"
+        "Roma last 5: L W W D L\n"
         "Over 2.5: 54% | BTTS: 46%\n"
         "H2H: Inter won 8, Roma won 2, Draws 3 in last 13 matches\n"
     )
