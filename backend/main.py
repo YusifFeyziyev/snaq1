@@ -64,22 +64,18 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 # ✅ DÜZƏLİŞ: Parser çıxışını M2/M3 formatına çevir
 # ─────────────────────────────────────────────
 def normalize_parsed(parsed: dict) -> dict:
-    """
-    Parser ev_sahibi/qonaq qaytarır.
-    M2 və M3 team1/team2 gözləyir.
-    Bu funksiya hər iki formatı dəstəkləyir.
-    """
+    # BUG FIX: parser None qaytararsa crash olmasın
+    if not isinstance(parsed, dict):
+        logger.error(f"normalize_parsed: gözlənilən dict, gələn: {type(parsed)}")
+        parsed = {}
     normalized = dict(parsed)
 
-    # team1 yoxdursa ev_sahibi-dən al
     if not normalized.get("team1"):
         normalized["team1"] = parsed.get("ev_sahibi", "Unknown")
 
-    # team2 yoxdursa qonaq-dan al
     if not normalized.get("team2"):
         normalized["team2"] = parsed.get("qonaq", "Unknown")
 
-    # team1_stats yoxdursa parser statistikasından qur
     if not normalized.get("team1_stats"):
         normalized["team1_stats"] = {
             "avg_goals_scored":   parsed.get("ortalama_qol_ev", 1.5),
@@ -88,7 +84,6 @@ def normalize_parsed(parsed: dict) -> dict:
             "defense_strength":   parsed.get("ortalama_sot_qonaq", 1.0),
         }
 
-    # team2_stats yoxdursa parser statistikasından qur
     if not normalized.get("team2_stats"):
         normalized["team2_stats"] = {
             "avg_goals_scored":   parsed.get("ortalama_qol_qonaq", 1.5),
@@ -97,9 +92,14 @@ def normalize_parsed(parsed: dict) -> dict:
             "defense_strength":   parsed.get("ortalama_sot_ev", 1.0),
         }
 
+    # BUG FIX: team1_form / team2_form həmişə string olmalıdır
+    if not isinstance(normalized.get("team1_form"), str):
+        normalized["team1_form"] = ""
+    if not isinstance(normalized.get("team2_form"), str):
+        normalized["team2_form"] = ""
+
     logger.info(f"Komandalar: {normalized['team1']} vs {normalized['team2']}")
     return normalized
-
 
 # ─────────────────────────────────────────────
 # ✅ DÜZƏLİŞ 1: Confidence normalizer
