@@ -161,15 +161,22 @@ def calculate_over_under(team1_stats: Dict, team2_stats: Dict,
         else:
             expected_total = (home_for + away_for + home_against + away_against) / 2
     elif market == "sot":
-        home_avg = get_stat(team1_stats, 'avg_sot_for',     4.5)
-        away_avg = get_stat(team2_stats, 'avg_sot_against', 4.0)
-        expected_total = home_avg + away_avg
-        league_avg = get_stat(team1_stats, 'league_avg_sot', 8.5)
+        home_for   = get_stat(team1_stats, 'avg_sot_for',     4.5)
+        away_for   = get_stat(team2_stats, 'avg_sot_for',     4.0)
+        home_ag    = get_stat(team1_stats, 'avg_sot_against', 3.5)
+        away_ag    = get_stat(team2_stats, 'avg_sot_against', 4.0)
+        league_avg = get_stat(team1_stats, 'league_avg_sot',  8.5)
+        expected_total = (home_for + away_for + home_ag + away_ag) / 2
+        if home_for < 1.5 or away_for < 1.5:
+            expected_total = league_avg
     elif market == "fouls":
-        home_avg = get_stat(team1_stats, 'avg_fouls_committed', 11.0)
-        away_avg = get_stat(team2_stats, 'avg_fouls_suffered',  10.5)
-        expected_total = home_avg + away_avg
-        league_avg = get_stat(team1_stats, 'league_avg_fouls', 22.0)
+        home_committed = get_stat(team1_stats, 'avg_fouls_committed', 11.0)
+        away_committed = get_stat(team2_stats, 'avg_fouls_committed', 11.0)
+        league_avg     = get_stat(team1_stats, 'league_avg_fouls',    22.0)
+        # İki komandanın committed-i topla (suffered deyil — eyni şeydir)
+        expected_total = home_committed + away_committed
+        if home_committed < 3.0 or away_committed < 3.0:
+            expected_total = league_avg
     elif market == "cards":
         home_avg = get_stat(team1_stats, 'avg_cards_per_match', 2.5)
         away_avg = get_stat(team2_stats, 'avg_cards_per_match', 2.5)
@@ -397,6 +404,25 @@ def run_m1(parser_json: Dict) -> Dict:
 
     # Qalanı eyni qalır...
     h2h_weight, h2h_match_count = calculate_h2h_weight(h2h_stats)
+    
+    # ✅ Parser-dən gələn xam ortalamalardan attack/defense strength yenidən hesabla
+    # Parser-in hesabladığına etibar etmirik — özümüz hesablayırıq
+    lh_avg = get_stat(team1_stats, 'league_home_avg_goals', 1.35)
+    la_avg = get_stat(team2_stats, 'league_away_avg_goals', 1.15)
+
+    t1_scored   = get_stat(team1_stats, 'avg_goals_scored',   0.0)
+    t1_conceded = get_stat(team1_stats, 'avg_goals_conceded', 0.0)
+    t2_scored   = get_stat(team2_stats, 'avg_goals_scored',   0.0)
+    t2_conceded = get_stat(team2_stats, 'avg_goals_conceded', 0.0)
+
+    if t1_scored > 0.3 and lh_avg > 0:
+        team1_stats['attack_strength']  = round(t1_scored  / lh_avg, 4)
+    if t1_conceded > 0.1 and la_avg > 0:
+        team1_stats['defense_strength'] = round(t1_conceded / la_avg, 4)
+    if t2_scored > 0.3 and la_avg > 0:
+        team2_stats['attack_strength']  = round(t2_scored  / la_avg, 4)
+    if t2_conceded > 0.1 and lh_avg > 0:
+        team2_stats['defense_strength'] = round(t2_conceded / lh_avg, 4)
 
     results = {
         "team1":      team1,

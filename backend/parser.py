@@ -5,6 +5,7 @@ import sys
 import io
 import traceback
 from typing import Dict, Any
+from unittest import result
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
@@ -221,54 +222,68 @@ class SoccerStatsParser:
         return ""
 
     def _inject_league_averages(self, result: Dict) -> Dict:
-        """Parser-in qaytardığı JSON-a lig ortalamalarını əlavə edir"""
         league = result.get("league", "")
         lg = get_league_avg(league)
 
         for team_key in ["team1_stats", "team2_stats"]:
             stats = result.get(team_key, {})
-            if not stats:
-                result[team_key] = {}
-                stats = result[team_key]
+        if not stats:
+            result[team_key] = {}
+            stats = result[team_key]
 
-            stats.setdefault("league_home_avg_goals", lg["home"])
-            stats.setdefault("league_away_avg_goals", lg["away"])
-            stats.setdefault("league_avg_goals",      lg["total"])
-            stats.setdefault("league_avg_corners",    lg["corners"])
-            stats.setdefault("league_avg_cards",      lg["cards"])
-            stats.setdefault("league_avg_fouls",      lg["fouls"])
-            stats.setdefault("league_avg_offsides",   lg["offsides"])
-            stats.setdefault("league_avg_throwins",   lg["throwins"])
-            stats.setdefault("league_avg_sot",        lg["sot"])
-            stats.setdefault("league_avg_penalties",  lg["penalties"])
+        # Lig ortalamaları
+        stats.setdefault("league_home_avg_goals", lg["home"])
+        stats.setdefault("league_away_avg_goals", lg["away"])
+        stats.setdefault("league_avg_goals",      lg["total"])
+        stats.setdefault("league_avg_corners",    lg["corners"])
+        stats.setdefault("league_avg_cards",      lg["cards"])
+        stats.setdefault("league_avg_fouls",      lg["fouls"])
+        stats.setdefault("league_avg_offsides",   lg["offsides"])
+        stats.setdefault("league_avg_throwins",   lg["throwins"])
+        stats.setdefault("league_avg_sot",        lg["sot"])
+        stats.setdefault("league_avg_penalties",  lg["penalties"])
 
-            stats.setdefault("attack_strength",     1.0)
-            stats.setdefault("defense_strength",    1.0)
-            stats.setdefault("avg_goals_scored",    lg["home"] if team_key == "team1_stats" else lg["away"])
-            stats.setdefault("avg_goals_conceded",  1.0)
-            stats.setdefault("avg_corners_for",     5.5 if team_key == "team1_stats" else 4.5)
-            stats.setdefault("avg_corners_against", 4.5 if team_key == "team1_stats" else 5.5)
-            stats.setdefault("avg_sot_for",         4.5)
-            stats.setdefault("avg_sot_against",     4.0)
-            stats.setdefault("avg_fouls_committed", 11.0)
-            stats.setdefault("avg_fouls_suffered",  11.0)
-            stats.setdefault("avg_cards_per_match", 2.5)
-            stats.setdefault("avg_offsides",        2.0)
-            stats.setdefault("avg_throwins",        19.5)
-            stats.setdefault("avg_penalties_for",   0.2)
-            stats.setdefault("data_confidence",     0.5)
+        # Default dəyərlər
+        stats.setdefault("avg_goals_scored",    lg["home"] if team_key == "team1_stats" else lg["away"])
+        stats.setdefault("avg_goals_conceded",  1.0)
+        stats.setdefault("avg_corners_for",     5.5 if team_key == "team1_stats" else 4.5)
+        stats.setdefault("avg_corners_against", 4.5 if team_key == "team1_stats" else 5.5)
+        stats.setdefault("avg_sot_for",         4.5)
+        stats.setdefault("avg_sot_against",     4.0)
+        stats.setdefault("avg_fouls_committed", 11.0)
+        stats.setdefault("avg_fouls_suffered",  11.0)
+        stats.setdefault("avg_cards_per_match", 2.5)
+        stats.setdefault("avg_offsides",        2.0)
+        stats.setdefault("avg_throwins",        19.5)
+        stats.setdefault("avg_penalties_for",   0.2)
+        stats.setdefault("data_confidence",     0.5)
+        stats.setdefault("attack_strength",     1.0)
+        stats.setdefault("defense_strength",    1.0)
 
-            if stats.get("attack_strength", 0) <= 0:
-                stats["attack_strength"] = 1.0
-            if stats.get("defense_strength", 0) <= 0:
-                stats["defense_strength"] = 1.0
+        # ✅ VALİDASİYA: Parser çox kiçik dəyər qaytarıbsa lig ortalaması ilə əvəz et
+        for field, min_val, default in [
+            ("avg_corners_for",     2.0, 5.0),
+            ("avg_corners_against", 1.5, 4.5),
+            ("avg_sot_for",         1.5, 4.5),
+            ("avg_sot_against",     1.0, 4.0),
+            ("avg_fouls_committed", 3.0, 11.0),
+            ("avg_fouls_suffered",  3.0, 11.0),
+            ("avg_cards_per_match", 0.5, 2.5),
+            ("avg_offsides",        0.3, 2.0),
+            ("avg_throwins",        5.0, 19.5),
+        ]:
+            if stats.get(field, 0) < min_val:
+                stats[field] = default
+
+        # attack/defense strength sıfır və ya mənfi olmasın
+        if stats.get("attack_strength", 0) <= 0:
+            stats["attack_strength"] = 1.0
+        if stats.get("defense_strength", 0) <= 0:
+            stats["defense_strength"] = 1.0
 
         result.setdefault("h2h_stats", {"matches": []})
-
-        # Forma sahələrini default olaraq əlavə et
         result.setdefault("team1_form", "")
         result.setdefault("team2_form", "")
-
         return result
 
     def parse(self, raw_text: str) -> Dict[str, Any]:
