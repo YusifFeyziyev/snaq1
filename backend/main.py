@@ -212,10 +212,11 @@ def analyze():
                     return normalize_confidence(obj[k])
             return 0
 
-        m1_conf = safe_get_conf(m1_result, ["confidence", "m1_guveni"])
+        m1_conf = safe_get_conf(m1_result, ["confidence", "m1_guveni", "m1_confidence"])
         m2_conf = safe_get_conf(m2_result, ["confidence", "m2_guveni"])
         m3_conf = 0  # M3 hələ çağırılmayıb, sonra yenilənəcək
-        logger.info(f"CONF → M1:{m1_conf} M2:{m2_conf} M3:{m3_conf}")
+        logger.info(f"M2 keys: {list(m2_result.keys()) if isinstance(m2_result, dict) else m2_result}")
+        
 
         # ─────────────────────────────────────────────
         # ✅ DÜZƏLİŞ 3: Error guard — M1/M2 xətası varsa M3/M4-ə getmə
@@ -258,7 +259,7 @@ def analyze():
             logger.warning("M1 və M3 arasında conflict aşkarlandı")
 
         # M3 confidence-i indi yenilə
-        m3_conf = safe_get_conf(m3_result, ["confidence"])
+        m3_conf = safe_get_conf(m3_result, ["confidence", "m3_guveni", "m3_confidence"])
         logger.info(f"CONF (yeniləndi) → M1:{m1_conf} M2:{m2_conf} M3:{m3_conf}")
 
         # ─────────────────────────────────────────────
