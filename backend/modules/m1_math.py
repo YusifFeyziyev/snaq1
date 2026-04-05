@@ -343,18 +343,30 @@ def calculate_combination(team1_stats: Dict, team2_stats: Dict, markets: List[st
 def calculate_corner_handicap(team1_stats, team2_stats, handicap=-1.5):
     home_corners = get_stat(team1_stats, 'avg_corners_for', 5.5)
     away_corners = get_stat(team2_stats, 'avg_corners_for', 4.5)
-    
-    # ✅ Sanity check: parser against/for-u qarışdıra bilər
     home_against = get_stat(team1_stats, 'avg_corners_against', 4.5)
     away_against = get_stat(team2_stats, 'avg_corners_against', 5.5)
-    
-    # Ev daha çox corner vurursa for > against olmalıdır
-    # Əgər tərsinədirsə, dəyərləri düzəlt
+
     if home_corners < home_against and home_against > 4.0:
-        home_corners, _ = home_against, home_corners
+        home_corners = home_against
     if away_corners > away_against and away_against > 2.0:
         away_corners = away_against
-    ...
+
+    # ← buradan etibarən silindi, əvəzinə:
+    expected_home = (home_corners + away_against) / 2
+    expected_away = (away_corners + home_against) / 2
+
+    diff_mean = expected_home - expected_away  # ev üstünlüyü
+    # handicap = -1.5: ev +1.5 geri-qol ilə qalib gəlirmi?
+    prob_home_covers = normal_over_probability(diff_mean, 2.5, abs(handicap))
+    prob_away_covers = 1 - prob_home_covers
+
+    return {
+        "expected_home_corners": round(expected_home, 2),
+        "expected_away_corners": round(expected_away, 2),
+        "handicap": handicap,
+        "home_covers": round(prob_home_covers, 4),
+        "away_covers": round(prob_away_covers, 4),
+    }
 
 def calculate_cascading_bonus(m1_results: Dict) -> Dict:
     confidence_boost = 0.0
@@ -399,16 +411,29 @@ def run_m1(parser_json: Dict) -> Dict:
     t2_conceded  = get_stat(team2_stats, 'avg_goals_conceded',  0.0)
 
     if t1_scored > 0.3 and lh_avg > 0:
-        team1_stats['attack_strength']  = round(t1_scored  / lh_avg, 4)
+        team1_stats['attack_strength']  = round(t1_scored  / lh_avg, 4)   # ev hücumu
     if t1_conceded > 0.1 and la_avg > 0:
-        team1_stats['defense_strength'] = round(t1_conceded / la_avg, 4)
+        team1_stats['defense_strength'] = round(t1_conceded / la_avg, 4)  # ev müdafiəsi (qonaq ort. ilə)
+
     if t2_scored > 0.3 and la_avg > 0:
-        team2_stats['attack_strength']  = round(t2_scored  / la_avg, 4)
+        team2_stats['attack_strength']  = round(t2_scored  / la_avg, 4)   # qonaq hücumu
     if t2_conceded > 0.1 and lh_avg > 0:
-        team2_stats['defense_strength'] = round(t2_conceded / lh_avg, 4)
+        team2_stats['defense_strength'] = round(t2_conceded / lh_avg, 4)  # qonaq müdafiəsi (ev ort. ilə)
 
     # Qalanı eyni qalır...
     h2h_weight, h2h_match_count = calculate_h2h_weight(h2h_stats)
+
+    def _form_mult(form_str, n=5):
+        if not form_str: return 1.0
+        recent = form_str[-n:]
+        score = sum({"W":1.0,"D":0.5,"L":0.0}.get(c,0.5) for c in recent)
+        return round(0.8 + (score/len(recent))*0.4, 3)
+
+    t1_form_mult = _form_mult(parser_json.get("team1_form",""))
+    t2_form_mult = _form_mult(parser_json.get("team2_form",""))
+    team1_stats['attack_strength'] = round(team1_stats.get('attack_strength',1.0) * t1_form_mult, 4)
+    team2_stats['attack_strength'] = round(team2_stats.get('attack_strength',1.0) * t2_form_mult, 4)
+
 
     # ✅ Parser-dən gələn xam ortalamalardan attack/defense strength yenidən hesabla
     # Parser-in hesabladığına etibar etmirik — özümüz hesablayırıq

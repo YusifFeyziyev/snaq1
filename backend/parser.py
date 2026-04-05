@@ -117,8 +117,9 @@ class SoccerStatsParser:
         return (
             "You are a football statistics parser. Analyze the text below and return ONLY a JSON object.\n"
             "Rules:\n"
-            "- attack_strength = team's avg goals scored / league home avg (for home team) or league away avg (for away team)\n"
-            "- defense_strength = team's avg goals conceded / opponent's league avg\n"
+            "- attack_strength = team's avg goals scored / league home avg (home team) or league away avg (away team)\n"
+            "- defense_strength for HOME team = avg_goals_conceded_home / league_away_avg\n"
+            "- defense_strength for AWAY team = avg_goals_conceded_away / league_home_avg\n"
             "- If exact data not found, use reasonable estimates based on context\n"
             "- data_confidence: 0.0-1.0 based on how much data was available (0.9 if full stats, 0.5 if partial)\n"
             "- All numeric fields must be float, not null\n"
@@ -227,9 +228,9 @@ class SoccerStatsParser:
 
         for team_key in ["team1_stats", "team2_stats"]:
             stats = result.get(team_key, {})
-        if not stats:
-            result[team_key] = {}
-            stats = result[team_key]
+            if not stats:      # ← for içindədir
+                result[team_key] = {}
+                stats = result[team_key]
 
         # Lig ortalamaları
         stats.setdefault("league_home_avg_goals", lg["home"])

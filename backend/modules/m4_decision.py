@@ -202,6 +202,13 @@ M3 NƏTİCƏSİ:
 
         bazarlar = groq_response.get("bazarlar", {})
 
+
+        # no_bet yoxdursa hər bazarın öz ehtimalına görə qərar ver
+        if not no_bet:
+            for b in bazarlar.values():
+                if not isinstance(b, dict): continue
+        ehtimal = b.get("ehtimal", 0)
+        b["qerar"] = "OYNARIM" if ehtimal >= 0.60 else "OYNAMARAM"
         # No-bet zone aktivdirsə bütün bazarları OYNAMARAM et
         if no_bet:
             for bazar_key in bazarlar:
