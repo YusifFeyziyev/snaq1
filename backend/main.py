@@ -190,6 +190,13 @@ def analyze():
 
     logger.info(f"Analiz sorğusu gəldi. Mətn uzunluğu: {len(stats_text)}")
 
+    m1_result = {}
+    m2_result = {}
+    m3_result = {}
+
+    def safe_dict(x):
+        return x if isinstance(x, dict) else {}
+
     try:
         # 1. PARSER
         if parse_soccer_stats is None:
@@ -226,10 +233,15 @@ def analyze():
             return jsonify({
                 "success":  True,
                 "decision": "NO BET",
-                "reason":   "M1 və ya M2 xətası",
-                "m1":       m1_result,
-                "m2":       m2_result,
-                "m3":       None
+                "reason":   "M1/M2 error",
+                "parser":   safe_dict(parsed),
+                "m1":       safe_dict(m1_result),
+                "m2":       safe_dict(m2_result),
+                "m3":       safe_dict(m3_result),
+                "m4": {
+                    "umumi_qerar": "OYNAMARAM",
+                    "sebeb": "error fallback"
+                }
             }), 200
 
         # 3. M3
@@ -271,9 +283,17 @@ def analyze():
             return jsonify({
                 "success":          True,
                 "decision":         "NO BET",
-                "reason":           "confidence aşağı və ya conflict var",
+                "reason":           "low confidence or conflict",
                 "avg_confidence":   avg_conf,
-                "conflict":         conflict
+                "conflict":         conflict,
+                "parser":           safe_dict(parsed),
+                "m1":               safe_dict(m1_result),
+                "m2":               safe_dict(m2_result),
+                "m3":               safe_dict(m3_result),
+                "m4": {
+                    "umumi_qerar": "OYNAMARAM",
+                    "sebeb": "NO BET"
+                }
             }), 200
 
         # 4. M4
