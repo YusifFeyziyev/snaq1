@@ -126,7 +126,7 @@ Aşağıdakı bütün bazarların HƏR BİRİ üçün ayrı qərar ver:
 8. ust_ust (ikinci yarı qol)
 
 HƏR BAZAR ÜÇÜN:
-- qerar: "OYNARIM" ya "OYNAMARAM"
+- qerar: "OYNA" ya "OYNAMA"
 - secenek: hansı tərəf (over/under, 1/x/2 və s.)
 - ehtimal: 0.0-1.0
 - guven: ✅✅ / ✅ / ⚠️ / ❌ / ⛔

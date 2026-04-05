@@ -148,10 +148,18 @@ def calculate_over_under(team1_stats: Dict, team2_stats: Dict,
         expected_total = home_attack * away_defense * lh_avg + away_attack * home_defense * la_avg
         league_avg = get_stat(team1_stats, 'league_avg_goals', 2.7)
     elif market == "corners":
-        home_avg = get_stat(team1_stats, 'avg_corners_for',     5.0)
-        away_avg = get_stat(team2_stats, 'avg_corners_against', 4.5)
-        expected_total = home_avg + away_avg
-        league_avg = get_stat(team1_stats, 'league_avg_corners', 9.5)
+        # Hər iki komandanın corners_for-unu topla (düzgün formula)
+        home_for     = get_stat(team1_stats, 'avg_corners_for',     5.5)
+        away_for     = get_stat(team2_stats, 'avg_corners_for',     4.5)
+        home_against = get_stat(team1_stats, 'avg_corners_against', 3.5)
+        away_against = get_stat(team2_stats, 'avg_corners_against', 5.0)
+        league_avg   = get_stat(team1_stats, 'league_avg_corners', 9.5)
+
+        # Sanity check — parser kicik deyər qaytarıbsa league avg işlət
+        if home_for < 2.0 or away_for < 2.0:
+            expected_total = league_avg
+        else:
+            expected_total = (home_for + away_for + home_against + away_against) / 2
     elif market == "sot":
         home_avg = get_stat(team1_stats, 'avg_sot_for',     4.5)
         away_avg = get_stat(team2_stats, 'avg_sot_against', 4.0)
@@ -164,9 +172,13 @@ def calculate_over_under(team1_stats: Dict, team2_stats: Dict,
         league_avg = get_stat(team1_stats, 'league_avg_fouls', 22.0)
     elif market == "cards":
         home_avg = get_stat(team1_stats, 'avg_cards_per_match', 2.5)
-        away_avg = get_stat(team2_stats, 'avg_cards_per_match', 2.7)
-        expected_total = home_avg + away_avg
+        away_avg = get_stat(team2_stats, 'avg_cards_per_match', 2.5)
         league_avg = get_stat(team1_stats, 'league_avg_cards', 5.2)
+        # Sanity check
+        if home_avg < 0.5 or away_avg < 0.5:
+            expected_total = league_avg
+        else:
+            expected_total = home_avg + away_avg
     elif market == "offsides":
         home_avg = get_stat(team1_stats, 'avg_offsides', 2.0)
         away_avg = get_stat(team2_stats, 'avg_offsides', 2.1)
@@ -364,7 +376,26 @@ def run_m1(parser_json: Dict) -> Dict:
     team2_stats = parser_json.get("team2_stats") or {}
     h2h_stats   = parser_json.get("h2h_stats")   or {}
 
-    # ✅ DÜZƏLİŞ 2: h2h_weight ilə birlikdə match sayını al
+    # ✅ ƏLAVƏ: Xam ortalamalar varsa attack/defense strength-i yenidən hesabla
+    # Parser-in hesabladığı dəyərlərə etibar etmə
+    lh_avg = get_stat(team1_stats, 'league_home_avg_goals', 1.35)
+    la_avg = get_stat(team2_stats, 'league_away_avg_goals', 1.15)
+
+    t1_scored    = get_stat(team1_stats, 'avg_goals_scored',    0.0)
+    t1_conceded  = get_stat(team1_stats, 'avg_goals_conceded',  0.0)
+    t2_scored    = get_stat(team2_stats, 'avg_goals_scored',    0.0)
+    t2_conceded  = get_stat(team2_stats, 'avg_goals_conceded',  0.0)
+
+    if t1_scored > 0.3 and lh_avg > 0:
+        team1_stats['attack_strength']  = round(t1_scored  / lh_avg, 4)
+    if t1_conceded > 0.1 and la_avg > 0:
+        team1_stats['defense_strength'] = round(t1_conceded / la_avg, 4)
+    if t2_scored > 0.3 and la_avg > 0:
+        team2_stats['attack_strength']  = round(t2_scored  / la_avg, 4)
+    if t2_conceded > 0.1 and lh_avg > 0:
+        team2_stats['defense_strength'] = round(t2_conceded / lh_avg, 4)
+
+    # Qalanı eyni qalır...
     h2h_weight, h2h_match_count = calculate_h2h_weight(h2h_stats)
 
     results = {
