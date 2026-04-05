@@ -238,18 +238,23 @@ def _post_process(result: Dict) -> Dict:
 
 # ========== SYSTEM PROMPT (dəyişdirilməyib) ==========
 
-SYSTEM_PROMPT = """Sən futbol məlumat analitikisən. Sənə axtarış nəticələri verilir.
+SYSTEM_PROMPT = """Sən futbol məlumat analitikisən. Sənə axtarış nəticələri veriləcək.
+
 QAYDALAR (MÜTLƏQ):
-1. Yalnız axtarış nəticələrindəki REAL məlumatlara əsaslan.
-2. Axtarış nəticəsində tapılmayan məlumat üçün status="tapılmadı", confidence=0.0 qaytar.
-3. ƏSLA uydurmaq, ehtimal etmək, ya da öz biliyin ilə cavab vermə. 
-   Axtarışda Simone Sozza yazırsa amma Daniele Doveri tapılıbsa — tapılanı yaz.
-4. Məlumat tapılıbsa status="real", confidence=0.7-0.95 qaytar.
-5. status="təxmin" istifadə etmə — ya "real", ya "tapılmadı".
-6. Məşqçi adlarını (coach) mütləq axtarış nəticələrindən tap.
-7. Zədəli oyunçu siyahısını injury/suspended/doubtful sözlərinin yanındakı adlardan çıxar.
-8. Hakimi referee/arbitro/árbitro/Schiedsrichter/wasit sözlərinin yanındakı adlardan tap.
-9. Yalnız aşağıdakı JSON strukturunu qaytar, heç bir əlavə mətn yazma."""
+1. Axtarış nəticələrindəki HƏM BİRBAŞA, HƏM DOLAYI məlumatlardan istifadə et.
+2. DOLAYI MƏLUMAT NÜMUNƏLƏRİ — bunlar "real" sayılır:
+   - "Conte's Napoli lined up 4-3-3" → ev məşqçisi Conte, ev sxemi 4-3-3
+   - "Milan's Fonseca opted for..." → qonaq məşqçisi Fonseca
+   - "without injured Osimhen" → Osimhen ev_absent siyahısına
+   - "played Europa League Thursday" → 3 gün əvvəl → yorğunluq var
+   - "title race decider" / "must-win" → motivasiya yüksəkdir
+   - "rotation expected" / "squad rotation" → rotation var
+   - hava saytı: "Naples: 18°C, clear" → temperature=18, condition=clear
+3. Şübhəli məlumat → confidence=0.5-0.65, status="real"
+4. Axtarışda İZ BELƏ OLMAYAN məlumat → status="tapılmadı", confidence=0.0
+5. status="təxmin" QADAĞANDIR — ya "real", ya "tapılmadı"
+6. JSON-da rəqəm sahələr mütləq rəqəm olsun (string yox)
+7. Yalnız aşağıdakı JSON strukturunu qaytar, heç bir əlavə mətn yazma."""
 
 
 # ========== DÜZƏLİŞ 7: GEMINI RESPONSE PROTECTION ==========
@@ -264,79 +269,82 @@ def analyze_with_gemini(team1: str, team2: str, search_text: str) -> Dict:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     user_prompt = f"""
-
-
 {SYSTEM_PROMPT}
 
-Komandalar: {team1} vs {team2}
+Komandalar: {team1} (ev) vs {team2} (qonaq)
 
 Axtarış nəticələri:
-{search_text[:8000]}
+{search_text[:9000]}
 
-Yalnız aşağıdakı JSON strukturunu qaytar:
+ÇIXIŞ QAYDASI — hər sahə üçün:
+- Tapıldısa: status="real", confidence=0.7-0.95, sahəni doldur
+- Tapılmadısa: status="tapılmadı", confidence=0.0, sahəni null burax
+- Şübhəlidirsə: status="real", confidence=0.5-0.65
+
+Yalnız bu JSON strukturunu qaytar (başqa heç nə yazma):
 {{
     "referee": {{
-        "name": "string or null",
+        "name": "Hakim adı və ya null",
         "yellow_avg": null,
         "red_avg": null,
-        "foul_sensitivity": "yüksək/orta/aşağı or null",
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "foul_sensitivity": "yüksək/orta/aşağı və ya null",
+        "status": "real və ya tapılmadı",
+        "confidence": 0.85
     }},
     "coach": {{
-        "home_coach": "string or null",
-        "away_coach": "string or null",
-        "home_tactical_trend": "string or null",
-        "away_tactical_trend": "string or null",
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "home_coach": "Ev məşqçisi adı və ya null",
+        "away_coach": "Qonaq məşqçisi adı və ya null",
+        "home_tactical_trend": "hücum/müdafiə/sahiblik/pressing və ya null",
+        "away_tactical_trend": "hücum/müdafiə/sahiblik/pressing və ya null",
+        "status": "real və ya tapılmadı",
+        "confidence": 0.75
     }},
     "injuries": {{
-        "home_absent": [],
-        "away_absent": [],
+        "home_absent": ["oyunçu adları siyahısı"],
+        "away_absent": ["oyunçu adları siyahısı"],
         "home_doubtful": [],
         "away_doubtful": [],
         "key_players_missing": [],
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "status": "real və ya tapılmadı",
+        "confidence": 0.80
     }},
     "lineup": {{
-        "home_expected": "string or null",
-        "away_expected": "string or null",
-        "home_rotation": "aşağı/orta/yüksək or null",
-        "away_rotation": "aşağı/orta/yüksək or null",
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "home_expected": "4-3-3 formatında və ya null",
+        "away_expected": "4-2-3-1 formatında və ya null",
+        "home_rotation": "aşağı/orta/yüksək və ya null",
+        "away_rotation": "aşağı/orta/yüksək və ya null",
+        "status": "real və ya tapılmadı",
+        "confidence": 0.70
     }},
     "stadium": {{
-        "name": "string or null",
+        "name": "Stadion adı və ya null",
         "capacity": null,
-        "home_advantage": "güclü/orta/zəif or null",
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "home_advantage": "güclü/orta/zəif və ya null",
+        "status": "real və ya tapılmadı",
+        "confidence": 0.80
     }},
     "weather": {{
         "temperature": null,
-        "condition": "string or null",
-        "wind": "string or null",
-        "impact": "aşağı/orta/yüksək or null",
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "condition": "aydın/buludlu/yağışlı və ya null",
+        "wind": "zəif/orta/güclü və ya null",
+        "impact": "aşağı/orta/yüksək və ya null",
+        "status": "real və ya tapılmadı",
+        "confidence": 0.70
     }},
     "motivation": {{
-        "home_motivation": "yüksək/orta/aşağı or null",
-        "away_motivation": "yüksək/orta/aşağı or null",
-        "reason": "string or null",
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "home_motivation": "yüksək/orta/aşağı",
+        "away_motivation": "yüksək/orta/aşağı",
+        "reason": "Motivasiya səbəbi — liqa mövqeyi, rekabet, nə varsa",
+        "status": "real",
+        "confidence": 0.75
     }},
     "fatigue": {{
-        "home_fatigue": "aşağı/orta/yüksək or null",
-        "away_fatigue": "aşağı/orta/yüksək or null",
+        "home_fatigue": "aşağı/orta/yüksək və ya null",
+        "away_fatigue": "aşağı/orta/yüksək və ya null",
         "days_since_last_match_home": null,
         "days_since_last_match_away": null,
-        "status": "real/tapılmadı",
-        "confidence": 0.0
+        "status": "real və ya tapılmadı",
+        "confidence": 0.70
     }}
 }}"""
 
@@ -440,14 +448,14 @@ def run_m2(parser_json: Dict) -> Dict:
     print(f"M2 başladı: {team1} vs {team2} | Liqa: {league_tag.strip() or 'naməlum'}")
 
     queries = [
-        f"{team1} {team2} {league_tag}referee appointed {date}",
-        f"{team1} {team2} {league_tag}injury suspended players {date}",
-        f"{team1} {team2} {league_tag}predicted lineup {date}",
-        f"{team1} {team2} head to head preview {date}",
-        f"{team1} last 5 matches results {date}",
-        f"{team2} last 5 matches results {date}",
-        f"{team1} coach tactics formation {league_tag}2025-26",
-        f"{team2} coach tactics formation {league_tag}2025-26",
+        f"{team1} vs {team2} referee official appointed {date}",
+        f"{team1} {team2} injuries suspensions team news {date}",
+        f"{team1} {team2} predicted starting lineup XI {date}",
+        f"{team1} {team2} match preview prediction {date}",
+        f"{team1} manager coach name tactics formation {date}",
+        f"{team2} manager coach name tactics formation {date}",
+        f"{team1} {team2} motivation standings league table {date}",
+        f"{team1} {team2} fatigue schedule fixture congestion {date}",
     ]
 
     all_search_text, successful = run_searches_parallel(queries)

@@ -280,11 +280,10 @@ M3 NƏTİCƏSİ:
         # ── 3. no_bet flags ─────────────────────────────────────────────────
         no_bet = sys_conf < self.no_bet_threshold
 
-        # 3a. Validator yoxlaması
+        # 3a. Validator yoxlaması — yalnız xəbərdarlıq, no_bet-i force etmir
         issues = validate_agents(m1_result, m2_result, m3_result)
         if issues:
-            print(f"⚠️ Problemlər: {issues}")
-            no_bet = True
+            print(f"⚠️ Validator xəbərdarlıqları (no_bet deyil): {issues}")
 
         # 3b. Conflict detection (M1 vs M3, 0-10 şkala)
         if self._check_conflict(m1_g, m3_g):
