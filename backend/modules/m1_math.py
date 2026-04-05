@@ -206,7 +206,7 @@ def calculate_over_under(team1_stats: Dict, team2_stats: Dict,
         league_avg = get_stat(team1_stats, 'league_avg_shots', 22.5)
     elif market == "penalties":
         home_avg = get_stat(team1_stats, 'avg_penalties_for',     0.2)
-        away_avg = get_stat(team2_stats, 'avg_penalties_against', 0.15)
+        away_avg = get_stat(team2_stats, 'avg_penalties_for', 0.15)
         expected_total = home_avg + away_avg
         league_avg = get_stat(team1_stats, 'league_avg_penalties', 0.35)
     else:
@@ -435,24 +435,6 @@ def run_m1(parser_json: Dict) -> Dict:
     team2_stats['attack_strength'] = round(team2_stats.get('attack_strength',1.0) * t2_form_mult, 4)
 
 
-    # ✅ Parser-dən gələn xam ortalamalardan attack/defense strength yenidən hesabla
-    # Parser-in hesabladığına etibar etmirik — özümüz hesablayırıq
-    lh_avg = get_stat(team1_stats, 'league_home_avg_goals', 1.35)
-    la_avg = get_stat(team2_stats, 'league_away_avg_goals', 1.15)
-
-    t1_scored   = get_stat(team1_stats, 'avg_goals_scored',   0.0)
-    t1_conceded = get_stat(team1_stats, 'avg_goals_conceded', 0.0)
-    t2_scored   = get_stat(team2_stats, 'avg_goals_scored',   0.0)
-    t2_conceded = get_stat(team2_stats, 'avg_goals_conceded', 0.0)
-
-    if t1_scored > 0.3 and lh_avg > 0:
-        team1_stats['attack_strength']  = round(t1_scored  / lh_avg, 4)
-    if t1_conceded > 0.1 and la_avg > 0:
-        team1_stats['defense_strength'] = round(t1_conceded / la_avg, 4)
-    if t2_scored > 0.3 and la_avg > 0:
-        team2_stats['attack_strength']  = round(t2_scored  / la_avg, 4)
-    if t2_conceded > 0.1 and lh_avg > 0:
-        team2_stats['defense_strength'] = round(t2_conceded / lh_avg, 4)
 
     results = {
         "team1":      team1,
