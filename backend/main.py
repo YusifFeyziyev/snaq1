@@ -101,6 +101,19 @@ def normalize_parsed(parsed: dict) -> dict:
     return normalized
 
 
+# ─────────────────────────────────────────────
+# ✅ DÜZƏLİŞ 1: Confidence normalizer
+# ─────────────────────────────────────────────
+def normalize_confidence(val):
+    try:
+        val = float(val)
+        if val <= 1:
+            val *= 100
+        return max(0, min(100, val))
+    except:
+        return 0
+
+
 def run_m1_m2_parallel(parsed_json: dict) -> tuple:
     m1_result, m2_result = None, None
     m1_error,  m2_error  = None, None
@@ -190,15 +203,90 @@ def analyze():
         # 2. M1 + M2 (paralel)
         m1_result, m2_result = run_m1_m2_parallel(parsed)
 
+        # ─────────────────────────────────────────────
+        # ✅ DÜZƏLİŞ 2: Safe confidence oxuma
+        # ─────────────────────────────────────────────
+        def safe_get_conf(obj, key_list):
+            for k in key_list:
+                if isinstance(obj, dict) and k in obj:
+                    return normalize_confidence(obj[k])
+            return 0
+
+        m1_conf = safe_get_conf(m1_result, ["confidence", "m1_guveni"])
+        m2_conf = safe_get_conf(m2_result, ["confidence", "m2_guveni"])
+        m3_conf = 0  # M3 hələ çağırılmayıb, sonra yenilənəcək
+        logger.info(f"CONF → M1:{m1_conf} M2:{m2_conf} M3:{m3_conf}")
+
+        # ─────────────────────────────────────────────
+        # ✅ DÜZƏLİŞ 3: Error guard — M1/M2 xətası varsa M3/M4-ə getmə
+        # ─────────────────────────────────────────────
+        if "error" in m1_result or "error" in m2_result:
+            logger.warning("M1/M2 error detected → NO BET")
+            return jsonify({
+                "success":  True,
+                "decision": "NO BET",
+                "reason":   "M1 və ya M2 xətası",
+                "m1":       m1_result,
+                "m2":       m2_result,
+                "m3":       None
+            }), 200
+
         # 3. M3
         if run_m3 is None:
             raise RuntimeError("M3 modulu işləmir")
+        # ─────────────────────────────────────────────
+        # ✅ DÜZƏLİŞ 6: M3 call protection
+        # ─────────────────────────────────────────────
+        if "error" in m2_result:
+            logger.warning("M2 error → M3 input zəif ola bilər")
         m3_result = run_m3(parsed, m2_result)
         logger.info("M3 tamamlandı")
+
+        # ─────────────────────────────────────────────
+        # ✅ DÜZƏLİŞ 4: Conflict detection
+        # ─────────────────────────────────────────────
+        def detect_conflict(m1, m3):
+            try:
+                m1_pred = str(m1.get("prediction", "")).lower()
+                m3_pred = str(m3.get("prediction", "")).lower()
+                return m1_pred and m3_pred and m1_pred != m3_pred
+            except:
+                return False
+
+        conflict = detect_conflict(m1_result, m3_result)
+        if conflict:
+            logger.warning("M1 və M3 arasında conflict aşkarlandı")
+
+        # M3 confidence-i indi yenilə
+        m3_conf = safe_get_conf(m3_result, ["confidence"])
+        logger.info(f"CONF (yeniləndi) → M1:{m1_conf} M2:{m2_conf} M3:{m3_conf}")
+
+        # ─────────────────────────────────────────────
+        # ✅ DÜZƏLİŞ 5: No bet logic
+        # ─────────────────────────────────────────────
+        avg_conf = (m1_conf + m2_conf + m3_conf) / 3
+        if avg_conf < 55 or conflict:
+            logger.warning(f"NO BET | avg_conf={avg_conf} conflict={conflict}")
+            return jsonify({
+                "success":          True,
+                "decision":         "NO BET",
+                "reason":           "confidence aşağı və ya conflict var",
+                "avg_confidence":   avg_conf,
+                "conflict":         conflict
+            }), 200
 
         # 4. M4
         if run_m4 is None:
             raise RuntimeError("M4 modulu işləmir")
+
+        # ─────────────────────────────────────────────
+        # ✅ DÜZƏLİŞ 7: M4 debug log
+        # ─────────────────────────────────────────────
+        logger.info("M4 input summary:")
+        logger.info(f"M1: {m1_result}")
+        logger.info(f"M2: {m2_result}")
+        logger.info(f"M3: {m3_result}")
+
         m4_result = run_m4(m1_result, m2_result, m3_result)
         logger.info("M4 tamamlandı")
 

@@ -5,7 +5,6 @@ import sys
 import io
 import traceback
 from typing import Dict, Any
-from unittest import result
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
@@ -39,6 +38,15 @@ def get_league_avg(league: str) -> Dict:
 def safe_str(text) -> str:
     return str(text).encode('ascii', errors='replace').decode('ascii')
 
+
+def safe_float(val, default: float = 0.0) -> float:
+    """LLM string/None qaytara bilər – təhlükəsiz float çevrilməsi."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def fix_invalid_json(text: str) -> str:
     # 1.79 / 1  →  1.79
     text = re.sub(r'(\d+\.?\d*)\s*/\s*\d+\.?\d*', r'\1', text)
@@ -52,8 +60,9 @@ class SoccerStatsParser:
         self.keys = GROQ_KEYS_PARSER
         self.model = MODEL_PARSER
         self.current_key_index = 0
-
-
+        # BUG FIX: sonsuz rekursiyadan qorunma
+        self.retry_count = 0
+        self.max_retries = len(self.keys)
 
     def _rotate_key(self):
         self.current_key_index = (self.current_key_index + 1) % len(self.keys)
@@ -89,7 +98,12 @@ class SoccerStatsParser:
     def _extract_json(self, text: str) -> Dict:
         cleaned = self._clean_json(text)
         cleaned = fix_invalid_json(cleaned)
-        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+        # BUG FIX: greedy `.*` → non-greedy `.*?` ilə ən kiçik düzgün JSON al
+        match = re.search(r"(\{.*?\})", cleaned, re.DOTALL)
+        # non-greedy bəzən çox kiçik match verə bilər;
+        # əgər uğursuz olarsa greedy fallback ilə yenidən cəhd et
+        if not match:
+            match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
         if match:
             json_str = match.group(1)
             try:
@@ -110,8 +124,6 @@ class SoccerStatsParser:
                     pass
             raise ValueError(f"JSON parse xetasi. Metn: {safe_str(json_str[:300])}")
         raise ValueError("JSON obyekti tapilmadi.")
-
-
 
     def _build_prompt(self, raw_text: str) -> str:
         return (
@@ -226,62 +238,83 @@ class SoccerStatsParser:
         league = result.get("league", "")
         lg = get_league_avg(league)
 
+        # BUG FIX: bütün logic for loop-un İÇİNDƏ olmalıdır
         for team_key in ["team1_stats", "team2_stats"]:
             stats = result.get(team_key, {})
-            if not stats:      # ← for içindədir
+            if not stats:
                 result[team_key] = {}
                 stats = result[team_key]
 
-        # Lig ortalamaları
-        stats.setdefault("league_home_avg_goals", lg["home"])
-        stats.setdefault("league_away_avg_goals", lg["away"])
-        stats.setdefault("league_avg_goals",      lg["total"])
-        stats.setdefault("league_avg_corners",    lg["corners"])
-        stats.setdefault("league_avg_cards",      lg["cards"])
-        stats.setdefault("league_avg_fouls",      lg["fouls"])
-        stats.setdefault("league_avg_offsides",   lg["offsides"])
-        stats.setdefault("league_avg_throwins",   lg["throwins"])
-        stats.setdefault("league_avg_sot",        lg["sot"])
-        stats.setdefault("league_avg_penalties",  lg["penalties"])
+            # ── Lig ortalamaları ────────────────────────────────────────────
+            stats.setdefault("league_home_avg_goals", lg["home"])
+            stats.setdefault("league_away_avg_goals", lg["away"])
+            stats.setdefault("league_avg_goals",      lg["total"])
+            stats.setdefault("league_avg_corners",    lg["corners"])
+            stats.setdefault("league_avg_cards",      lg["cards"])
+            stats.setdefault("league_avg_fouls",      lg["fouls"])
+            stats.setdefault("league_avg_offsides",   lg["offsides"])
+            stats.setdefault("league_avg_throwins",   lg["throwins"])
+            stats.setdefault("league_avg_sot",        lg["sot"])
+            stats.setdefault("league_avg_penalties",  lg["penalties"])
 
-        # Default dəyərlər
-        stats.setdefault("avg_goals_scored",    lg["home"] if team_key == "team1_stats" else lg["away"])
-        stats.setdefault("avg_goals_conceded",  1.0)
-        stats.setdefault("avg_corners_for",     5.5 if team_key == "team1_stats" else 4.5)
-        stats.setdefault("avg_corners_against", 4.5 if team_key == "team1_stats" else 5.5)
-        stats.setdefault("avg_sot_for",         4.5)
-        stats.setdefault("avg_sot_against",     4.0)
-        stats.setdefault("avg_fouls_committed", 11.0)
-        stats.setdefault("avg_fouls_suffered",  11.0)
-        stats.setdefault("avg_cards_per_match", 2.5)
-        stats.setdefault("avg_offsides",        2.0)
-        stats.setdefault("avg_throwins",        19.5)
-        stats.setdefault("avg_penalties_for",   0.2)
-        stats.setdefault("data_confidence",     0.5)
-        stats.setdefault("attack_strength",     1.0)
-        stats.setdefault("defense_strength",    1.0)
+            # ── Default dəyərlər ────────────────────────────────────────────
+            stats.setdefault("avg_goals_scored",    lg["home"] if team_key == "team1_stats" else lg["away"])
+            stats.setdefault("avg_goals_conceded",  1.0)
+            stats.setdefault("avg_corners_for",     5.5 if team_key == "team1_stats" else 4.5)
+            stats.setdefault("avg_corners_against", 4.5 if team_key == "team1_stats" else 5.5)
+            stats.setdefault("avg_sot_for",         4.5)
+            stats.setdefault("avg_sot_against",     4.0)
+            stats.setdefault("avg_fouls_committed", 11.0)
+            stats.setdefault("avg_fouls_suffered",  11.0)
+            stats.setdefault("avg_cards_per_match", 2.5)
+            stats.setdefault("avg_offsides",        2.0)
+            stats.setdefault("avg_throwins",        19.5)
+            stats.setdefault("avg_penalties_for",   0.2)
+            stats.setdefault("data_confidence",     0.5)
+            stats.setdefault("attack_strength",     1.0)
+            stats.setdefault("defense_strength",    1.0)
 
-        # ✅ VALİDASİYA: Parser çox kiçik dəyər qaytarıbsa lig ortalaması ilə əvəz et
-        for field, min_val, default in [
-            ("avg_corners_for",     2.0, 5.0),
-            ("avg_corners_against", 1.5, 4.5),
-            ("avg_sot_for",         1.5, 4.5),
-            ("avg_sot_against",     1.0, 4.0),
-            ("avg_fouls_committed", 3.0, 11.0),
-            ("avg_fouls_suffered",  3.0, 11.0),
-            ("avg_cards_per_match", 0.5, 2.5),
-            ("avg_offsides",        0.3, 2.0),
-            ("avg_throwins",        5.0, 19.5),
-        ]:
-            if stats.get(field, 0) < min_val:
-                stats[field] = default
+            # ── BUG FIX: safe_float – LLM string qaytara bilər ─────────────
+            for numeric_field in [
+                "avg_goals_scored", "avg_goals_conceded",
+                "avg_corners_for", "avg_corners_against",
+                "avg_sot_for", "avg_sot_against",
+                "avg_fouls_committed", "avg_fouls_suffered",
+                "avg_cards_per_match", "avg_offsides",
+                "avg_throwins", "avg_penalties_for",
+                "attack_strength", "defense_strength",
+            ]:
+                stats[numeric_field] = safe_float(stats.get(numeric_field), 0.0)
 
-        # attack/defense strength sıfır və ya mənfi olmasın
-        if stats.get("attack_strength", 0) <= 0:
-            stats["attack_strength"] = 1.0
-        if stats.get("defense_strength", 0) <= 0:
-            stats["defense_strength"] = 1.0
+            # ── BUG FIX: data_confidence 0-1 → 0-100 normalizasiyası ───────
+            dc = safe_float(stats.get("data_confidence"), 0.5)
+            if dc <= 1.0:
+                dc = dc * 100
+            dc = max(0.0, min(100.0, dc))
+            stats["data_confidence"] = dc
 
+            # ── Validasiya: çox kiçik dəyərləri default ilə əvəz et ─────────
+            for field, min_val, default in [
+                ("avg_corners_for",     2.0, 5.0),
+                ("avg_corners_against", 1.5, 4.5),
+                ("avg_sot_for",         1.5, 4.5),
+                ("avg_sot_against",     1.0, 4.0),
+                ("avg_fouls_committed", 3.0, 11.0),
+                ("avg_fouls_suffered",  3.0, 11.0),
+                ("avg_cards_per_match", 0.5, 2.5),
+                ("avg_offsides",        0.3, 2.0),
+                ("avg_throwins",        5.0, 19.5),
+            ]:
+                if stats.get(field, 0) < min_val:
+                    stats[field] = default
+
+            # ── Mənfi / sıfır dəyərlərdən qorunma ──────────────────────────
+            if stats.get("attack_strength", 0) <= 0:
+                stats["attack_strength"] = 1.0
+            if stats.get("defense_strength", 0) <= 0:
+                stats["defense_strength"] = 1.0
+
+        # ── Safety defaults ─────────────────────────────────────────────────
         result.setdefault("h2h_stats", {"matches": []})
         result.setdefault("team1_form", "")
         result.setdefault("team2_form", "")
@@ -290,6 +323,10 @@ class SoccerStatsParser:
     def parse(self, raw_text: str) -> Dict[str, Any]:
         if not raw_text or not raw_text.strip():
             raise ValueError("Bos metn gonderildi.")
+
+        # BUG FIX: sonsuz rekursiyadan qorunma
+        if self.retry_count >= self.max_retries:
+            raise RuntimeError("Butun API keyler rate limitdedir.")
 
         prompt = self._build_prompt(raw_text)
         messages = [
@@ -317,12 +354,21 @@ class SoccerStatsParser:
             if f1: print(f"Parser: {result.get('team1','')} forması: {f1}")
             if f2: print(f"Parser: {result.get('team2','')} forması: {f2}")
 
+            # ── Debug çıxışı ─────────────────────────────────────────────────
+            print("=== PARSER DEBUG ===")
+            print(f"Team1: {result.get('team1')}")
+            print(f"Team2: {result.get('team2')}")
+            print(f"League: {result.get('league')}")
+            print("Team1 confidence:", result["team1_stats"].get("data_confidence"))
+            print("Team2 confidence:", result["team2_stats"].get("data_confidence"))
+
             return result
 
         except ConnectionError as e:
             if "rate limit" in str(e):
                 print("Rate limit askarlandi, key deyisdirilir...")
                 self._rotate_key()
+                self.retry_count += 1
                 return self.parse(raw_text)
             raise
         except Exception as e:
