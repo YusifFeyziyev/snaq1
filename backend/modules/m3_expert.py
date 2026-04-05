@@ -2,7 +2,7 @@ import os
 import json
 import re
 import requests
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 try:
     from config import GROQ_KEY_M3, MODEL_M3
@@ -11,6 +11,49 @@ except ImportError:
     MODEL_M3    = os.getenv("MODEL_M3", "llama-3.3-70b-versatile")
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+# ─────────────────────────────────────────
+#  DÜZƏLİŞ 6: DEBUG LOGGING
+# ─────────────────────────────────────────
+
+def debug_m3(name, value):
+    print(f"[M3 DEBUG] {name}: {value}")
+
+
+# ─────────────────────────────────────────
+#  DÜZƏLİŞ 1: AI RESPONSE VALIDATION
+# ─────────────────────────────────────────
+
+def validate_ai_response(resp) -> bool:
+    if not resp:
+        return False
+    if not isinstance(resp, dict):
+        return False
+    return True
+
+
+# ─────────────────────────────────────────
+#  DÜZƏLİŞ 2: SAFE JSON PARSE
+# ─────────────────────────────────────────
+
+def safe_json_parse(text: str) -> Optional[Dict]:
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────
+#  DÜZƏLİŞ 8: JSON MƏTNİ TƏMİZLƏ
+# ─────────────────────────────────────────
+
+def clean_json_text(text: str) -> str:
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start != -1 and end != -1:
+        return text[start:end + 1]
+    return text
 
 
 # ─────────────────────────────────────────
@@ -34,9 +77,7 @@ def count_real_fields(m2_data: Dict) -> int:
 
 
 # ─────────────────────────────────────────
-#  ✅ DÜZƏLİŞ 1: H2H stats-dan ev/qonaq qalibiyyəti çıxar
-#  Əvvəl: parser_json.get("h2h", {}).get("home_wins") → həmişə None
-#  İndi: h2h_stats.matches[] siyahısından hesabla
+#  H2H stats-dan ev/qonaq qalibiyyəti çıxar
 # ─────────────────────────────────────────
 
 def parse_h2h_wins(parser_json: Dict):
@@ -113,16 +154,14 @@ def hesabla_carpanlar(parser_json: Dict, m2_data: Dict) -> Dict:
     }
 
     # --- MOTİVASİYA ---
-    # ✅ DÜZƏLİŞ 2: league_position parser-dən gəlmirsə M2-dən al
     mot_field = m2_data.get("motivation", {})
-    mot_ev = mot_field.get("home_motivation") if isinstance(mot_field, dict) else None
+    mot_ev  = mot_field.get("home_motivation") if isinstance(mot_field, dict) else None
     mot_qon = get_m2_field(m2_data, "motivation", "away_motivation", 0.6)
     mot_map = {"çox yüksək": 1.15, "yüksək": 1.08, "orta": 1.0, "aşağı": 0.88, "yox": 0.82}
     if mot_ev  and mot_ev  in mot_map: carpanlar["motivasiya_ev"]    = mot_map[mot_ev]
     if mot_qon and mot_qon in mot_map: carpanlar["motivasiya_qonaq"] = mot_map[mot_qon]
 
     # --- YORĞUNLUQ ---
-    # ✅ DÜZƏLİŞ 3: days_since_last_match M2-dən al (parser göndərmir)
     days1 = t1.get("days_since_last_match") or \
             get_m2_field(m2_data, "fatigue", "days_since_last_match_home", 0.5)
     days2 = t2.get("days_since_last_match") or \
@@ -160,7 +199,6 @@ def hesabla_carpanlar(parser_json: Dict, m2_data: Dict) -> Dict:
         carpanlar["hakim_tesiri"] = sev_map[ref_sensitivity]
 
     # --- PSİXOLOJİ ÜSTÜNLÜK ---
-    # ✅ DÜZƏLİŞ 4: h2h_stats.matches[]-dan hesabla
     h2h_ev, h2h_qon = parse_h2h_wins(parser_json)
     if   h2h_ev  > h2h_qon + 1: carpanlar["psixoloji_ustunluk"] = 1.06
     elif h2h_qon > h2h_ev  + 1: carpanlar["psixoloji_ustunluk"] = 0.94
@@ -186,7 +224,6 @@ def hesabla_flags(parser_json: Dict, m2_data: Dict,
         if len(inj.get("home_absent", [])) >= 4: flags.append("KRİTİK_İTKİ_EV")
         if len(inj.get("away_absent", [])) >= 4: flags.append("KRİTİK_İTKİ_QONAQ")
 
-    # ✅ DÜZƏLİŞ 5: days M2-dən də al
     days1 = t1.get("days_since_last_match") or \
             get_m2_field(m2_data, "fatigue", "days_since_last_match_home", 0.5)
     days2 = t2.get("days_since_last_match") or \
@@ -216,7 +253,9 @@ def hesabla_m3_guveni(m2_data: Dict, flags: List[str], carpanlar: Dict) -> float
     if len(flags) > 4:  zid_bal = 1.5
     if len(flags) >= 6: zid_bal = 1.0
 
-    return round(min(10.0, m2_bal + signal_bal + zid_bal), 1)
+    # ✅ DÜZƏLİŞ 3: CONFIDENCE LIMIT — 0-10 aralığından kənara çıxmasın
+    raw = m2_bal + signal_bal + zid_bal
+    return round(max(0.0, min(raw, 10.0)), 1)
 
 
 # ─────────────────────────────────────────
@@ -298,6 +337,13 @@ Aşağıdakı JSON strukturunu doldur:
 
 def get_default_m3_result(tip_ev="balanslı", tip_qonaq="balanslı",
                            carpanlar=None, flags=None, error=None) -> Dict:
+    default_carpanlar = carpanlar or {
+        "motivasiya_ev": 1.0, "motivasiya_qonaq": 1.0,
+        "yorgunluq_ev":  1.0, "yorgunluq_qonaq":  1.0,
+        "hakim_tesiri":  1.0, "heyat_derinliyi_ev": 1.0,
+        "heyat_derinliyi_qonaq": 1.0, "psixoloji_ustunluk": 1.0,
+    }
+    # ✅ DÜZƏLİŞ 9: output format sabit — confidence, markets, reason həmişə var
     return {
         "tempo":          {"value": "orta",     "confidence": 0.3, "source": "default"},
         "taktika_ev":     {"value": tip_ev,      "confidence": 0.4, "source": "statistika"},
@@ -310,25 +356,25 @@ def get_default_m3_result(tip_ev="balanslı", tip_qonaq="balanslı",
         "hakim_tesiri":   {"value": "normal",     "confidence": 0.3, "source": "default"},
         "oyun_oxunusu":   {"value": "Məlumat yetərsizdir.", "confidence": 0.2, "source": "default"},
         "kahin_cumlesi":  {"value": "Analiz üçün kifayət qədər data yoxdur.", "confidence": 0.2, "source": "default"},
-        "flags":     flags or [],
-        "carpanlar": carpanlar or {
-            "motivasiya_ev": 1.0, "motivasiya_qonaq": 1.0,
-            "yorgunluq_ev":  1.0, "yorgunluq_qonaq":  1.0,
-            "hakim_tesiri":  1.0, "heyat_derinliyi_ev": 1.0,
-            "heyat_derinliyi_qonaq": 1.0, "psixoloji_ustunluk": 1.0,
-        },
+        "flags":          flags or [],
+        "carpanlar":      default_carpanlar,
         "toqqusma_matrisi": {
             "ev_hucum_qonaq_mudafie": "balanslı",
             "qonaq_hucum_ev_mudafie": "balanslı",
         },
         "critical_factors": [],
-        "m3_guveni": 3.0,
-        "m3_error":  error or "Default fallback",
+        "m3_guveni":  3.0,
+        "m3_error":   error or "Default fallback",
+        # ✅ DÜZƏLİŞ 9: məcburi output sahələri
+        "confidence": 3.0,
+        "markets":    {},
+        "reason":     error or "AI response empty",
     }
 
 
 # ─────────────────────────────────────────
 #  GROQ ÇAĞIRIŞI
+#  DÜZƏLİŞ 2 + 7 + 8 birlikdə tətbiq edilib
 # ─────────────────────────────────────────
 
 def call_groq(system_prompt: str, user_prompt: str) -> Dict:
@@ -349,18 +395,42 @@ def call_groq(system_prompt: str, user_prompt: str) -> Dict:
         "max_tokens":  3000,
     }
 
-    response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=75)
-    response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"].strip()
+    # ✅ DÜZƏLİŞ 7: TIMEOUT PROTECTION — ayrı exception tipi ilə handle et
+    try:
+        response = requests.post(
+            GROQ_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=75,
+        )
+        response.raise_for_status()
+    except requests.Timeout:
+        raise ValueError("Groq API timeout: 75s keçdi.")
+    except requests.ConnectionError as e:
+        raise ValueError(f"Groq bağlantı xətası: {e}")
+    except requests.HTTPError as e:
+        raise ValueError(f"Groq HTTP xətası: {e}")
 
-    match = re.search(r'\{.*\}', content, re.DOTALL)
-    if not match:
-        raise ValueError("JSON tapılmadı")
+    # Raw content al
+    raw_content = response.json()["choices"][0]["message"]["content"].strip()
+    debug_m3("groq raw response (ilk 300 simvol)", raw_content[:300])
 
-    raw = match.group()
-    raw = re.sub(r',\s*}', '}', raw)
-    raw = re.sub(r',\s*]', ']', raw)
-    return json.loads(raw)
+    # ✅ DÜZƏLİŞ 5 + 8: mətn təmizlə, sonra parse et
+    cleaned = clean_json_text(raw_content)
+    debug_m3("clean_json_text nəticəsi (ilk 200)", cleaned[:200])
+
+    # Trailing comma-ları düzəlt
+    cleaned = re.sub(r',\s*}', '}', cleaned)
+    cleaned = re.sub(r',\s*]', ']', cleaned)
+
+    # ✅ DÜZƏLİŞ 2: safe_json_parse istifadə et
+    result = safe_json_parse(cleaned)
+    debug_m3("safe_json_parse nəticəsi tipi", type(result).__name__)
+
+    if result is None:
+        raise ValueError("JSON parse uğursuz oldu.")
+
+    return result
 
 
 # ─────────────────────────────────────────
@@ -376,16 +446,15 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
     print(f"M3 başladı: {team1} vs {team2}")
     print(f"M2 real məlumat sayı: {count_real_fields(m2_data)}")
 
-    # ✅ DÜZƏLİŞ 6: avg_corners → avg_corners_for (parser sahə adı)
     tip_ev = taktika_tipi_tey(
         t1.get("avg_goals_scored"),
         t1.get("avg_goals_conceded"),
-        t1.get("avg_corners_for"),       # ← düzəldi
+        t1.get("avg_corners_for"),
     )
     tip_qonaq = taktika_tipi_tey(
         t2.get("avg_goals_scored"),
         t2.get("avg_goals_conceded"),
-        t2.get("avg_corners_for"),       # ← düzəldi
+        t2.get("avg_corners_for"),
     )
 
     coach_home = get_m2_field(m2_data, "coach", "home_tactical_trend", 0.65)
@@ -397,6 +466,22 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
     carpanlar = hesabla_carpanlar(parser_json, m2_data)
     flags     = hesabla_flags(parser_json, m2_data, tip_ev, tip_qonaq)
 
+    # Güvəni erkən hesabla — AI çağırışından ÖNCƏ
+    guveni = hesabla_m3_guveni(m2_data, flags, carpanlar)
+    # ✅ DÜZƏLİŞ 3: confidence limit — 0-10 arası
+    guveni = max(0.0, min(guveni, 10.0))
+    debug_m3("m3_guveni (pre-AI)", guveni)
+
+    # ✅ DÜZƏLİŞ 4: AI OVERPOWER CHECK — data zəifdirsə AI-ı çağırma
+    if guveni < 5.0:
+        print(f"⚠️ AI zəifdir → ignore edilir (guveni={guveni})")
+        debug_m3("ai overpower check", f"guveni={guveni} < 5 → default fallback")
+        return get_default_m3_result(
+            tip_ev=tip_ev, tip_qonaq=tip_qonaq,
+            carpanlar=carpanlar, flags=flags,
+            error=f"Data keyfiyyəti aşağıdır (guveni={guveni})",
+        )
+
     try:
         system_p, user_p = build_prompt(
             team1, team2, parser_json, m2_data,
@@ -404,10 +489,22 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
         )
         result = call_groq(system_p, user_p)
 
-        guveni = hesabla_m3_guveni(m2_data, flags, carpanlar)
+        # ✅ DÜZƏLİŞ 1: AI RESPONSE VALIDATION
+        if not validate_ai_response(result):
+            print("⚠️ AI cavabı səhvdir")
+            debug_m3("validate_ai_response", "FAILED → default fallback")
+            return get_default_m3_result(
+                tip_ev=tip_ev, tip_qonaq=tip_qonaq,
+                carpanlar=carpanlar, flags=flags,
+                error="AI cavabı etibarsızdır.",
+            )
+
+        debug_m3("AI cavabı açarları", list(result.keys()))
+
         result["m3_guveni"]       = guveni
         result["m3_guveni_value"] = guveni
 
+        # Flat _value sahələri çıxar
         flat_fields = [
             "tempo", "taktika_ev", "taktika_qonaq", "dominant_teref",
             "qol_veziyyeti", "btts_siqnal", "corner_siqnal",
@@ -417,14 +514,29 @@ def run_m3(parser_json: Dict, m2_data: Dict) -> Dict:
             if field in result and isinstance(result[field], dict):
                 result[f"{field}_value"] = result[field].get("value", "—")
 
+                # ✅ DÜZƏLİŞ 3: hər field-in confidence-ini 0-1 arasında tut
+                raw_conf = result[field].get("confidence", 0.0)
+                try:
+                    result[field]["confidence"] = max(0.0, min(float(raw_conf), 1.0))
+                except (TypeError, ValueError):
+                    result[field]["confidence"] = 0.0
+
         result.setdefault("flags", flags)
         result["carpanlar"] = carpanlar
 
+        # ✅ DÜZƏLİŞ 9: OUTPUT FORMAT SABİT — confidence, markets, reason həmişə var
+        result["confidence"] = float(guveni)
+        result.setdefault("markets", {})
+        result.setdefault("reason", "AI analiz tamamlandı.")
+
+        debug_m3("m3_guveni (final)", guveni)
         print(f"M3 güvəni: {guveni}/10 | Taktika: {tip_ev} vs {tip_qonaq}")
         return result
 
     except Exception as e:
         print(f"M3 xətası: {e}")
+        debug_m3("exception", str(e))
+        # ✅ DÜZƏLİŞ 5: EMPTY RESPONSE FALLBACK
         return get_default_m3_result(
             tip_ev=tip_ev, tip_qonaq=tip_qonaq,
             carpanlar=carpanlar, flags=flags, error=str(e),
